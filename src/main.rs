@@ -7,6 +7,11 @@ fn main() {
 
     let data = fs.read("hello.txt").unwrap();
     println!("{}", core::str::from_utf8(data).unwrap());
+
+    fs.create("other_file.txt", b"some other data here.")
+        .unwrap();
+
+    fs.list_files();
 }
 
 #[cfg(not(feature = "std"))]

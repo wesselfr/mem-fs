@@ -64,4 +64,20 @@ impl MemoryFs {
             .find(|f| f.name == name)
             .map(|f| &self.storage[f.offset..f.offset + f.size])
     }
+    pub fn delete(&mut self, name: &str) -> Result<(), &'static str> {
+        todo!()
+    }
+
+    // Debug
+    pub fn list_files(&self) {
+        println!("File entries:");
+        for entry in &self.entries {
+            println!("\t{} ({} bytes @ {})", entry.name, entry.size, entry.offset);
+        }
+    }
+
+    /// Visualize the filesystem in hex format.
+    pub fn hex_dump(&self) {
+        todo!()
+    }
 }
