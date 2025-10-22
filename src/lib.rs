@@ -1,9 +1,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use core::str::FromStr;
+
 use heapless::{String, Vec};
 
 const MAX_FILE_NAME_LENGHT: usize = 255;
-const STORAGE_ENTRIES: usize = 4096;
+const MAX_NUM_FILES: usize = 32;
 const STORAGE_SIZE: usize = 4096;
 
 pub struct FileEntry {
@@ -13,7 +15,7 @@ pub struct FileEntry {
 }
 
 pub struct MemoryFs {
-    pub entries: Vec<FileEntry, STORAGE_ENTRIES>,
+    pub entries: Vec<FileEntry, MAX_NUM_FILES>,
     pub storage: [u8; STORAGE_SIZE],
     pub used: usize,
 }
@@ -27,27 +29,35 @@ impl MemoryFs {
         }
     }
 
+    // File system operations
+    // TODO: Implement a filesystem trait for these functions
+    // TODO: Support atomic operations
     pub fn create(&mut self, name: &str, data: &[u8]) -> Result<(), &'static str> {
         if self.used + data.len() > STORAGE_SIZE {
             return Err("Not enough space");
         }
-        let offset = self.used;
-        self.storage[offset..offset + data.len()].copy_from_slice(data);
-        self.used += data.len();
 
-        let mut n = String::new();
-        n.push_str(name).map_err(|_| "Name too long")?;
+        // Check if we have space for another entry
+        // FIXME: FileEntry should not be a limiting factor for adding files, storage space should be the only limit.
+        if name.len() > MAX_FILE_NAME_LENGHT {
+            return Err("Filename is too big");
+        }
+
+        let offset = self.used;
         self.entries
             .push(FileEntry {
-                name: n,
+                name: String::from_str(name).expect("Error while processing the filename"),
                 offset,
                 size: data.len(),
             })
             .map_err(|_| "Too many files")?;
 
+        // Insert the data into the file system.
+        self.storage[offset..offset + data.len()].copy_from_slice(data);
+        self.used += data.len();
+
         Ok(())
     }
-
     pub fn read(&self, name: &str) -> Option<&[u8]> {
         self.entries
             .iter()
