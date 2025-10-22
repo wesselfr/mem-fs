@@ -1,0 +1,12 @@
+[package]
+name = "mem-fs"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+heapless = { version = "0.8", default-features = false }
+
