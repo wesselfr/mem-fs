@@ -12,6 +12,10 @@ fn main() {
         .unwrap();
 
     fs.list_files();
+
+    fs.delete("hello.txt").unwrap();
+
+    fs.list_files();
 }
 
 #[cfg(not(feature = "std"))]

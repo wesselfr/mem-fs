@@ -43,6 +43,7 @@ impl MemoryFs {
             return Err("Filename is too big");
         }
 
+        // FIXME: Prevent memory fragmentation when files get deleted.
         let offset = self.used;
         self.entries
             .push(FileEntry {
@@ -65,7 +66,15 @@ impl MemoryFs {
             .map(|f| &self.storage[f.offset..f.offset + f.size])
     }
     pub fn delete(&mut self, name: &str) -> Result<(), &'static str> {
-        todo!()
+        let index = self
+            .entries
+            .iter()
+            .position(|f| f.name == name)
+            .expect("File not found");
+        self.entries.remove(index);
+
+        // No need to clear data from storage, can be overwritten.
+        Ok(())
     }
 
     // Debug
