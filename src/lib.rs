@@ -1,5 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use core::str::FromStr;
 use heapless::{String, Vec};
 
 const MAX_FILE_NAME_LENGHT: usize = 255;
@@ -7,9 +8,10 @@ const MAX_NUM_FILES: usize = 32;
 
 const STORAGE_SIZE: usize = 4096;
 
-const PAGE_SIZE: usize = 128;
+const PAGE_SIZE: usize = 32;
 const NUM_PAGES: usize = STORAGE_SIZE / PAGE_SIZE;
 
+#[derive(Copy, Clone)]
 struct Extent {
     // TODO: Consider u16 / u32 for start_page and len_page.
     start_page: usize,
@@ -18,7 +20,7 @@ struct Extent {
 
 pub struct FileEntry {
     pub name: String<MAX_FILE_NAME_LENGHT>,
-    pub offset: usize,
+    pub size: usize,
     extent: Extent,
 }
 
@@ -41,13 +43,53 @@ impl MemoryFs {
     // TODO: Implement a filesystem trait for these functions
     // TODO: Support atomic operations
     pub fn create(&mut self, name: &str, data: &[u8]) -> Result<(), &'static str> {
-        todo!()
+        // Check if we have space for another entry
+        if name.len() > MAX_FILE_NAME_LENGHT {
+            return Err("Filename is too big");
+        }
+
+        let required_pages = data.len().div_ceil(PAGE_SIZE);
+        let extent = self.find_free_pages(required_pages);
+
+        if extent.is_none() {
+            return Err("No free pages found");
+        };
+        let extent = extent.unwrap();
+
+        self.entries
+            .push(FileEntry {
+                name: String::from_str(name).expect("Error while processing filename"),
+                size: data.len(),
+                extent,
+            })
+            // FIXME: FileEntry should not be a limiting factor for adding files, storage space should be the only limit.
+            .map_err(|_| "Too many files")?;
+
+        self.mark_pages(extent.start_page, extent.len_pages, true);
+
+        let offset = extent.start_page * PAGE_SIZE;
+        self.storage[offset..offset + data.len()].copy_from_slice(data);
+
+        Ok(())
     }
     pub fn read(&self, name: &str) -> Option<&[u8]> {
-        todo!()
+        self.entries.iter().find(|f| f.name == name).map(|f| {
+            &self.storage[f.extent.start_page * PAGE_SIZE..f.extent.start_page * PAGE_SIZE + f.size]
+        })
     }
     pub fn delete(&mut self, name: &str) -> Result<(), &'static str> {
-        todo!()
+        let index = self
+            .entries
+            .iter()
+            .position(|f| f.name == name)
+            .expect("File not found");
+        let page_extent = self.entries[index].extent;
+
+        self.entries.remove(index);
+        self.mark_pages(page_extent.start_page, page_extent.len_pages, false);
+
+        // No need to clear data from storage, can be overwritten.
+        Ok(())
     }
 
     // Page allocator functions
@@ -93,7 +135,15 @@ impl MemoryFs {
 
     // Debug
     pub fn list_files(&self) {
-        todo!()
+        println!("File entries:");
+        for entry in &self.entries {
+            println!(
+                "\t{} ({} bytes @ {})",
+                entry.name,
+                entry.size,
+                entry.extent.start_page * PAGE_SIZE
+            );
+        }
     }
 
     /// Visualize the filesystem in hex format.
