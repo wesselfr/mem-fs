@@ -3,7 +3,7 @@
 use core::str::FromStr;
 use heapless::{String, Vec};
 
-const MAX_FILE_NAME_LENGHT: usize = 255;
+const MAX_FILE_NAME_LENGTH: usize = 255;
 const MAX_NUM_FILES: usize = 32;
 
 const STORAGE_SIZE: usize = 4096;
@@ -19,7 +19,7 @@ struct Extent {
 }
 
 pub struct FileEntry {
-    pub name: String<MAX_FILE_NAME_LENGHT>,
+    pub name: String<MAX_FILE_NAME_LENGTH>,
     pub size: usize,
     extent: Extent,
 }
@@ -44,7 +44,7 @@ impl MemoryFs {
     // TODO: Support atomic operations
     pub fn create(&mut self, name: &str, data: &[u8]) -> Result<(), &'static str> {
         // Check if we have space for another entry
-        if name.len() > MAX_FILE_NAME_LENGHT {
+        if name.len() > MAX_FILE_NAME_LENGTH {
             return Err("Filename is too big");
         }
 
