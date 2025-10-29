@@ -134,6 +134,7 @@ impl MemoryFs {
     }
 
     // Debug
+    #[cfg(feature = "std")]
     pub fn list_files(&self) {
         println!("File entries:");
         for entry in &self.entries {
@@ -147,26 +148,24 @@ impl MemoryFs {
     }
 
     /// Visualize the filesystem in hex format.
+    #[cfg(feature = "std")]
     pub fn hex_dump(&self, start: usize, len: usize) {
         let end = (start + len).min(STORAGE_SIZE);
         for (i, chunk) in self.storage[start..end].chunks(16).enumerate() {
-            #[cfg(feature = "std")]
-            {
-                print!("{:#06x} | ", start + i * 16);
-                for b in chunk {
-                    print!("{:02X} ", b);
-                }
-                print!(" | ");
-                for b in chunk {
-                    let c = *b as char;
-                    if c.is_ascii_graphic() || c == ' ' {
-                        print!("{}", c);
-                    } else {
-                        print!(".");
-                    }
-                }
-                println!();
+            print!("{:#06x} | ", start + i * 16);
+            for b in chunk {
+                print!("{:02X} ", b);
             }
+            print!(" | ");
+            for b in chunk {
+                let c = *b as char;
+                if c.is_ascii_graphic() || c == ' ' {
+                    print!("{}", c);
+                } else {
+                    print!(".");
+                }
+            }
+            println!();
         }
     }
 }
