@@ -6,7 +6,7 @@ use heapless::{String, Vec};
 const MAX_FILE_NAME_LENGTH: usize = 255;
 const MAX_NUM_FILES: usize = 32;
 
-const STORAGE_SIZE: usize = 4096;
+pub const STORAGE_SIZE: usize = 4096;
 
 const PAGE_SIZE: usize = 32;
 const NUM_PAGES: usize = STORAGE_SIZE / PAGE_SIZE;
@@ -56,9 +56,25 @@ impl MemoryFs {
         };
         let extent = extent.unwrap();
 
+        let file_name: String<MAX_FILE_NAME_LENGTH> =
+            String::from_str(name).expect("Error while processing filename");
+
+        // Check for invalid or duplicate names.
+        if file_name == "" || file_name == " " {
+            return Err("File name cannot be empty or a whitespace.");
+        }
+        if self
+            .entries
+            .iter()
+            .position(|f| f.name == file_name)
+            .is_some()
+        {
+            return Err("File already exsist.");
+        }
+
         self.entries
             .push(FileEntry {
-                name: String::from_str(name).expect("Error while processing filename"),
+                name: file_name,
                 size: data.len(),
                 extent,
             })
@@ -78,11 +94,10 @@ impl MemoryFs {
         })
     }
     pub fn delete(&mut self, name: &str) -> Result<(), &'static str> {
-        let index = self
-            .entries
-            .iter()
-            .position(|f| f.name == name)
-            .expect("File not found");
+        let index = match self.entries.iter().position(|f| f.name == name) {
+            Some(index) => index,
+            None => return Err("File not found."),
+        };
         let page_extent = self.entries[index].extent;
 
         self.entries.remove(index);
