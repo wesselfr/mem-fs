@@ -15,10 +15,25 @@ fn main() {
         .unwrap();
 
     fs.list_files();
+    fs.hex_dump(0, 256);
 
     fs.delete("hello.txt").unwrap();
 
     fs.list_files();
+    fs.hex_dump(0, 256);
+
+    fs.create(
+        "yet_another_file.txt",
+        b"some more data. some more data. some more data.",
+    )
+    .unwrap();
+
+    fs.list_files();
+    fs.hex_dump(0, 256);
+
+    fs.create("test_file.txt", b"some data").unwrap();
+    fs.list_files();
+    fs.hex_dump(0, 256);
 }
 
 #[cfg(not(feature = "std"))]
