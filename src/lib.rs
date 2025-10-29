@@ -94,11 +94,10 @@ impl MemoryFs {
         })
     }
     pub fn delete(&mut self, name: &str) -> Result<(), &'static str> {
-        let index = self
-            .entries
-            .iter()
-            .position(|f| f.name == name)
-            .expect("File not found");
+        let index = match self.entries.iter().position(|f| f.name == name) {
+            Some(index) => index,
+            None => return Err("File not found."),
+        };
         let page_extent = self.entries[index].extent;
 
         self.entries.remove(index);
