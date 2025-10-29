@@ -6,7 +6,7 @@ use heapless::{String, Vec};
 const MAX_FILE_NAME_LENGTH: usize = 255;
 const MAX_NUM_FILES: usize = 32;
 
-const STORAGE_SIZE: usize = 4096;
+pub const STORAGE_SIZE: usize = 4096;
 
 const PAGE_SIZE: usize = 32;
 const NUM_PAGES: usize = STORAGE_SIZE / PAGE_SIZE;

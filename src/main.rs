@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod test;
+
 #[cfg(feature = "std")]
 fn main() {
     use mem_fs::MemoryFs;
