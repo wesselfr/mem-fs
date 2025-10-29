@@ -56,9 +56,25 @@ impl MemoryFs {
         };
         let extent = extent.unwrap();
 
+        let file_name: String<MAX_FILE_NAME_LENGTH> =
+            String::from_str(name).expect("Error while processing filename");
+
+        // Check for invalid or duplicate names.
+        if file_name == "" || file_name == " " {
+            return Err("File name cannot be empty or a whitespace.");
+        }
+        if self
+            .entries
+            .iter()
+            .position(|f| f.name == file_name)
+            .is_some()
+        {
+            return Err("File already exsist.");
+        }
+
         self.entries
             .push(FileEntry {
-                name: String::from_str(name).expect("Error while processing filename"),
+                name: file_name,
                 size: data.len(),
                 extent,
             })
