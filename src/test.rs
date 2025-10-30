@@ -21,26 +21,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn read_non_exsisting_file() {
         let fs = MemoryFs::new();
-        fs.read("foo").expect("File does not exsist.");
+        assert!(fs.read("foo").is_none());
     }
 
     #[test]
-    #[should_panic]
     fn empty_file_name() {
         let mut fs = MemoryFs::new();
-        fs.create("", b"test").unwrap();
+        assert!(fs.create("", b"test").is_err());
     }
 
     #[test]
-    #[should_panic]
     fn create_duplicate_file() {
         let mut fs = MemoryFs::new();
 
         fs.create("foo", b"test").unwrap();
-        fs.create("foo", b"test").unwrap();
+        assert!(fs.create("foo", b"test").is_err());
     }
 
     #[test]
@@ -52,10 +49,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn delete_non_existing_file() {
         let mut fs = MemoryFs::new();
-        fs.delete("foo").unwrap();
+        assert!(fs.delete("foo").is_err());
     }
 
     #[test]
@@ -83,11 +79,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn file_too_big() {
         let mut fs = MemoryFs::new();
         let data = [255; mem_fs::STORAGE_SIZE + 1];
-        fs.create("foo", &data).unwrap();
+        assert!(fs.create("foo", &data).is_err());
     }
 
     #[cfg(not(feature = "std"))]
