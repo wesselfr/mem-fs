@@ -119,10 +119,7 @@ impl MemoryFs {
         })
     }
     pub fn delete(&mut self, name: &str) -> Result<(), FsErr> {
-        let index = match self.entries.iter().position(|f| f.name == name) {
-            Some(index) => index,
-            None => return Err(FsErr::NotFound),
-        };
+        let index = self.find_file_index(name)?;
         if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
             return Err(FsErr::ReadOnly);
         };
@@ -194,6 +191,13 @@ impl MemoryFs {
         }
 
         Ok(name)
+    }
+
+    fn find_file_index(&self, name: &str) -> Result<usize, FsErr> {
+        match self.entries.iter().position(|f| f.name == name) {
+            Some(index) => Ok(index),
+            None => Err(FsErr::NotFound),
+        }
     }
 
     // Debug
