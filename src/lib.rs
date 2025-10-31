@@ -11,6 +11,31 @@ pub const STORAGE_SIZE: usize = 4096;
 const PAGE_SIZE: usize = 32;
 const NUM_PAGES: usize = STORAGE_SIZE / PAGE_SIZE;
 
+#[derive(Debug)]
+pub enum FsErr {
+    ReadOnly,
+    WouldFragment,
+    TooManyExtents,
+    NoSpace,
+    NotFound,
+    Duplicate,
+    FileNameInvalid(&'static str),
+    TooManyFiles, // TODO: Depricate when possible. Too many files should not be a limiting factor (only OutOfSpace).
+    InvalidOp,
+    Corrupt,
+}
+
+bitflags::bitflags! {
+    #[repr(transparent)]
+    pub struct FileFlags: u32{
+        const IMMUTABLE=1<<0; // reject write/append/delete
+        const DO_NOT_FRAGMENT=1<<1; // append must stay contiguous or fail
+        const CHECKSUMMED=1<<2; // verify on read (unimplemented)
+        const APPEND_ONLY=1<<3; // no write_at (unimplemented)
+        const SEALED_NAMES=1<<4; // no rename allowed
+    }
+}
+
 #[derive(Copy, Clone)]
 struct Extent {
     // TODO: Consider u16 / u32 for start_page and len_page.
@@ -21,6 +46,7 @@ struct Extent {
 pub struct FileEntry {
     pub name: String<MAX_FILE_NAME_LENGTH>,
     pub size: usize,
+    flags: FileFlags,
     extent: Extent,
 }
 
@@ -42,17 +68,25 @@ impl MemoryFs {
     // File system operations
     // TODO: Implement a filesystem trait for these functions
     // TODO: Support atomic operations
-    pub fn create(&mut self, name: &str, data: &[u8]) -> Result<(), &'static str> {
+    pub fn create(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
+        self.create_with_flags(name, data, FileFlags::empty())
+    }
+    pub fn create_with_flags(
+        &mut self,
+        name: &str,
+        data: &[u8],
+        flags: FileFlags,
+    ) -> Result<(), FsErr> {
         // Check if we have space for another entry
         if name.len() > MAX_FILE_NAME_LENGTH {
-            return Err("Filename is too big");
+            return Err(FsErr::FileNameInvalid("File name too long"));
         }
 
         let required_pages = data.len().div_ceil(PAGE_SIZE);
         let extent = self.find_free_pages(required_pages);
 
         if extent.is_none() {
-            return Err("No free pages found");
+            return Err(FsErr::TooManyExtents);
         };
         let extent = extent.unwrap();
 
@@ -61,7 +95,9 @@ impl MemoryFs {
 
         // Check for invalid or duplicate names.
         if file_name == "" || file_name == " " {
-            return Err("File name cannot be empty or a whitespace.");
+            return Err(FsErr::FileNameInvalid(
+                "File name cannot be empty or a whitespace.",
+            ));
         }
         if self
             .entries
@@ -69,17 +105,18 @@ impl MemoryFs {
             .position(|f| f.name == file_name)
             .is_some()
         {
-            return Err("File already exsist.");
+            return Err(FsErr::Duplicate);
         }
 
         self.entries
             .push(FileEntry {
                 name: file_name,
                 size: data.len(),
+                flags,
                 extent,
             })
             // FIXME: FileEntry should not be a limiting factor for adding files, storage space should be the only limit.
-            .map_err(|_| "Too many files")?;
+            .map_err(|_| FsErr::TooManyFiles)?;
 
         self.mark_pages(extent.start_page, extent.len_pages, true);
 
@@ -93,10 +130,13 @@ impl MemoryFs {
             &self.storage[f.extent.start_page * PAGE_SIZE..f.extent.start_page * PAGE_SIZE + f.size]
         })
     }
-    pub fn delete(&mut self, name: &str) -> Result<(), &'static str> {
+    pub fn delete(&mut self, name: &str) -> Result<(), FsErr> {
         let index = match self.entries.iter().position(|f| f.name == name) {
             Some(index) => index,
-            None => return Err("File not found."),
+            None => return Err(FsErr::NotFound),
+        };
+        if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
+            return Err(FsErr::ReadOnly);
         };
         let page_extent = self.entries[index].extent;
 
