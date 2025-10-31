@@ -184,7 +184,7 @@ impl MemoryFs {
         name: String<MAX_FILE_NAME_LENGTH>,
     ) -> Result<String<MAX_FILE_NAME_LENGTH>, FsErr> {
         // Check for invalid or duplicate names.
-        if name == "" || name == " " {
+        if name == "" || name.contains(" ") {
             return Err(FsErr::FileNameInvalid(
                 "File name cannot be empty or a whitespace.",
             ));
