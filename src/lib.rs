@@ -94,19 +94,7 @@ impl MemoryFs {
             String::from_str(name).expect("Error while processing filename");
 
         // Check for invalid or duplicate names.
-        if file_name == "" || file_name == " " {
-            return Err(FsErr::FileNameInvalid(
-                "File name cannot be empty or a whitespace.",
-            ));
-        }
-        if self
-            .entries
-            .iter()
-            .position(|f| f.name == file_name)
-            .is_some()
-        {
-            return Err(FsErr::Duplicate);
-        }
+        let file_name = self.validate_file_name(file_name)?;
 
         self.entries
             .push(FileEntry {
@@ -186,6 +174,26 @@ impl MemoryFs {
             }
         }
         None
+    }
+
+    // Helper functions
+
+    /// Check for invalid or duplicate names.
+    fn validate_file_name(
+        &self,
+        name: String<MAX_FILE_NAME_LENGTH>,
+    ) -> Result<String<MAX_FILE_NAME_LENGTH>, FsErr> {
+        // Check for invalid or duplicate names.
+        if name == "" || name == " " {
+            return Err(FsErr::FileNameInvalid(
+                "File name cannot be empty or a whitespace.",
+            ));
+        }
+        if self.entries.iter().position(|f| f.name == name).is_some() {
+            return Err(FsErr::Duplicate);
+        }
+
+        Ok(name)
     }
 
     // Debug
