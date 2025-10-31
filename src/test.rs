@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use mem_fs::FsErr;
     use mem_fs::MemoryFs;
 
     #[test]
@@ -38,6 +39,36 @@ mod tests {
 
         fs.create("foo", b"test").unwrap();
         assert!(fs.create("foo", b"test").is_err());
+    }
+
+    #[test]
+    fn rename_file() {
+        let mut fs = MemoryFs::new();
+        fs.create("foo", b"test").expect("Failed to create file");
+        assert_eq!(fs.read("foo").unwrap(), b"test");
+        fs.rename("foo", "bar").expect("Failed to rename file.");
+        assert!(fs.read("foo").is_none());
+        assert_eq!(fs.read("bar").unwrap(), b"test");
+    }
+
+    #[test]
+    fn rename_file_invalid() {
+        let mut fs = MemoryFs::new();
+        fs.create("foo", b"test").expect("Failed to create file");
+
+        assert!(fs.rename("foo", "").is_err());
+        assert!(fs.rename("foo", " ").is_err());
+        assert!(fs.rename("foo", " bar").is_err());
+        assert!(fs.rename("foo", "foo").is_err());
+    }
+
+    #[test]
+    fn rename_file_duplicate() {
+        let mut fs = MemoryFs::new();
+        fs.create("a", b"file_1").expect("Failed to create file.");
+        fs.create("b", b"file_2").expect("Failed to create file.");
+
+        assert!(matches!(fs.rename("b", "a"), Err(FsErr::Duplicate)));
     }
 
     #[test]

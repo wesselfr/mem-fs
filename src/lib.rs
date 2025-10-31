@@ -118,6 +118,16 @@ impl MemoryFs {
             &self.storage[f.extent.start_page * PAGE_SIZE..f.extent.start_page * PAGE_SIZE + f.size]
         })
     }
+    pub fn rename(&mut self, name: &str, new_name: &str) -> Result<(), FsErr> {
+        let index = self.find_file_index(name)?;
+        let new_name = self.validate_file_name(
+            String::from_str(new_name)
+                .map_err(|_| FsErr::FileNameInvalid("Error while processing file name"))?,
+        )?;
+
+        self.entries[index].name = new_name;
+        Ok(())
+    }
     pub fn delete(&mut self, name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
         if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
