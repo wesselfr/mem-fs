@@ -50,12 +50,12 @@ pub struct FileEntry {
     extent: Extent,
 }
 
+pub type MemFs = MemoryFs;
 pub struct MemoryFs {
     pub entries: Vec<FileEntry, MAX_NUM_FILES>,
     pub storage: [u8; STORAGE_SIZE],
     page_bitmap: [u32; NUM_PAGES.div_ceil(32)],
 }
-
 impl MemoryFs {
     pub fn new() -> Self {
         Self {

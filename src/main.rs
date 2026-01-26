@@ -3,9 +3,9 @@ mod test;
 
 #[cfg(feature = "std")]
 fn main() {
-    use mem_fs::MemoryFs;
+    use mem_fs::MemFs;
 
-    let mut fs = MemoryFs::new();
+    let mut fs = MemFs::new();
     fs.create("hello.txt", b"hello mem-fs!").unwrap();
 
     let data = fs.read("hello.txt").unwrap();
