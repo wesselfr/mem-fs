@@ -6,10 +6,10 @@ use heapless::{String, Vec};
 const MAX_FILE_NAME_LENGTH: usize = 255;
 const MAX_NUM_FILES: usize = 32;
 
-pub const STORAGE_SIZE: usize = 4096;
+pub const DEFAULT_STORAGE_SIZE: usize = 4096;
+pub const DEFAULT_PAGE_SIZE: usize = 32;
 
-const PAGE_SIZE: usize = 32;
-const NUM_PAGES: usize = STORAGE_SIZE / PAGE_SIZE;
+const MAX_PAGE_BITMAP_WORDS: usize = 256;
 
 #[derive(Debug)]
 pub enum FsErr {
@@ -50,19 +50,38 @@ pub struct FileEntry {
     extent: Extent,
 }
 
-pub type MemFs = MemoryFs;
-pub struct MemoryFs {
-    pub entries: Vec<FileEntry, MAX_NUM_FILES>,
-    pub storage: [u8; STORAGE_SIZE],
-    page_bitmap: [u32; NUM_PAGES.div_ceil(32)],
+pub type MemFs = MemoryFs<DEFAULT_STORAGE_SIZE, DEFAULT_PAGE_SIZE>;
+pub struct MemoryFs<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> {
+    entries: Vec<FileEntry, MAX_NUM_FILES>,
+    storage: [u8; STORAGE_SIZE],
+    page_bitmap: heapless::Vec<u32, MAX_PAGE_BITMAP_WORDS>,
 }
-impl MemoryFs {
+
+impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, PAGE_SIZE> {
+    fn num_pages() -> usize {
+        STORAGE_SIZE / PAGE_SIZE
+    }
+
+    fn bitmap_words() -> usize {
+        (Self::num_pages() + 31) / 32
+    }
+
     pub fn new() -> Self {
+        assert!(PAGE_SIZE > 0);
+        assert!(STORAGE_SIZE % PAGE_SIZE == 0);
+
+        let mut page_bitmap: heapless::Vec<u32, MAX_PAGE_BITMAP_WORDS> = heapless::Vec::new();
+        let words = Self::bitmap_words();
+        assert!(words <= MAX_PAGE_BITMAP_WORDS);
+
+        for _ in 0..words {
+            page_bitmap.push(0).ok();
+        }
+
         Self {
             entries: Vec::new(),
-            // TODO: Allow user to present a alloc! function.
             storage: [0; STORAGE_SIZE],
-            page_bitmap: [0; NUM_PAGES.div_ceil(32)],
+            page_bitmap,
         }
     }
 
@@ -166,10 +185,6 @@ impl MemoryFs {
         let current_capacity = current_extent.len_pages * PAGE_SIZE;
         let required_size = self.entries[index].size + data.len();
 
-        // FIXME: DEBUG ONLY
-        println!("available_space: {}", current_capacity);
-        println!("needed_space: {}, ", required_size);
-
         // Case 1: Fits current allocation.
         if required_size <= current_capacity {
             let offset = (current_extent.start_page * PAGE_SIZE) + self.entries[index].size;
@@ -200,31 +215,29 @@ impl MemoryFs {
         };
 
         // Case 3: Relocate (repack) if allowed.
-        if repack {
-            if let Some(new_extent) = self.find_free_pages(required_pages) {
-                let old_start = current_extent.start_page * PAGE_SIZE;
-                let old_len = self.entries[index].size;
-                let old_range = old_start..old_start + old_len;
+        if repack && let Some(new_extent) = self.find_free_pages(required_pages) {
+            let old_start = current_extent.start_page * PAGE_SIZE;
+            let old_len = self.entries[index].size;
+            let old_range = old_start..old_start + old_len;
 
-                let new_start = new_extent.start_page * PAGE_SIZE;
+            let new_start = new_extent.start_page * PAGE_SIZE;
 
-                self.mark_pages(new_extent.start_page, new_extent.len_pages, true);
+            self.mark_pages(new_extent.start_page, new_extent.len_pages, true);
 
-                // Move exsisting bytes
-                if old_len > 0 && old_start != new_start {
-                    self.storage.copy_within(old_range, new_start);
-                }
-
-                // Append new bytes.
-                let append_offset = new_start + old_len;
-                self.storage[append_offset..append_offset + data.len()].copy_from_slice(data);
-
-                self.mark_pages(current_extent.start_page, current_extent.len_pages, false);
-
-                self.entries[index].extent = new_extent;
-                self.entries[index].size = required_size;
-                return Ok(());
+            // Move exsisting bytes
+            if old_len > 0 && old_start != new_start {
+                self.storage.copy_within(old_range, new_start);
             }
+
+            // Append new bytes.
+            let append_offset = new_start + old_len;
+            self.storage[append_offset..append_offset + data.len()].copy_from_slice(data);
+
+            self.mark_pages(current_extent.start_page, current_extent.len_pages, false);
+
+            self.entries[index].extent = new_extent;
+            self.entries[index].size = required_size;
+            return Ok(());
         }
         // Can't extend and repack is not allowed.
         Err(FsErr::WouldFragment)
@@ -266,7 +279,7 @@ impl MemoryFs {
         let mut run_start = None; //TODO: Use previous alloction marker, potentially speeds up search.
         let mut run_len = 0;
 
-        for page in 0..NUM_PAGES {
+        for page in 0..Self::num_pages() {
             if self.page_is_free(page) {
                 if run_start.is_none() {
                     run_start = Some(page)
@@ -287,11 +300,11 @@ impl MemoryFs {
     }
     // Check if next pages are free. Early return if not the case.
     fn check_neighbour_pages_free(&self, start: usize, need_pages: usize) -> Option<Extent> {
-        assert!(start <= NUM_PAGES);
+        assert!(start <= Self::num_pages());
         assert_ne!(need_pages, 0);
         let mut run_len = 0;
 
-        for page in start..NUM_PAGES {
+        for page in start..Self::num_pages() {
             if self.page_is_free(page) {
                 run_len += 1;
             } else {
@@ -315,12 +328,12 @@ impl MemoryFs {
         name: String<MAX_FILE_NAME_LENGTH>,
     ) -> Result<String<MAX_FILE_NAME_LENGTH>, FsErr> {
         // Check for invalid or duplicate names.
-        if name == "" || name.contains(" ") {
+        if name.is_empty() || name.contains(" ") {
             return Err(FsErr::FileNameInvalid(
                 "File name cannot be empty or a whitespace.",
             ));
         }
-        if self.entries.iter().position(|f| f.name == name).is_some() {
+        if self.entries.iter().any(|f| f.name == name) {
             return Err(FsErr::Duplicate);
         }
 

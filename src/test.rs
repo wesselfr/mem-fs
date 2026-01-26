@@ -126,14 +126,14 @@ mod tests {
     fn large_file() {
         let mut fs = MemFs::new();
         // FIXME: Use actual storage limit.
-        let data = [255; mem_fs::STORAGE_SIZE];
+        let data = [255; mem_fs::DEFAULT_STORAGE_SIZE];
         fs.create("foo", &data).unwrap();
     }
 
     #[test]
     fn file_too_big() {
         let mut fs = MemFs::new();
-        let data = [255; mem_fs::STORAGE_SIZE + 1];
+        let data = [255; mem_fs::DEFAULT_STORAGE_SIZE + 1];
         assert!(fs.create("foo", &data).is_err());
     }
 
