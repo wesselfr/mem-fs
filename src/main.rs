@@ -22,6 +22,8 @@ fn main() {
     fs.list_files();
     fs.hex_dump(0, 256);
 
+    fs.append("other_file.txt", b" Pretty cool!").unwrap();
+
     fs.create(
         "yet_another_file.txt",
         b"some more data. some more data. some more data.",
@@ -30,6 +32,15 @@ fn main() {
 
     fs.list_files();
     fs.hex_dump(0, 256);
+
+    fs.append("yet_another_file.txt", b" We can add even more!")
+        .unwrap();
+
+    fs.append(
+        "other_file.txt",
+        b" Even some more extra data for other file",
+    )
+    .unwrap();
 
     fs.create("test_file.txt", b"some data").unwrap();
     fs.list_files();

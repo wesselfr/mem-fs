@@ -12,6 +12,14 @@ mod tests {
     }
 
     #[test]
+    fn create_empty_file() {
+        let mut fs = MemoryFs::new();
+        fs.create("foo", b"").expect("Failed to create file.");
+
+        assert_eq!(fs.read("foo").unwrap(), b"");
+    }
+
+    #[test]
     fn multiple_files() {
         let mut fs = MemoryFs::new();
         fs.create("foo", b"file_1").expect("Failed to create file.");
@@ -69,6 +77,19 @@ mod tests {
         fs.create("b", b"file_2").expect("Failed to create file.");
 
         assert!(matches!(fs.rename("b", "a"), Err(FsErr::Duplicate)));
+    }
+
+    #[test]
+    fn append_file() {
+        let mut fs = MemoryFs::new();
+        fs.create("foo", b"").unwrap();
+        fs.append("foo", b"test").unwrap();
+    }
+
+    #[test]
+    fn append_non_exsisting_file() {
+        let mut fs = MemoryFs::new();
+        assert!(matches!(fs.append("foo", b"test"), Err(FsErr::NotFound)));
     }
 
     #[test]

@@ -60,6 +60,7 @@ impl MemoryFs {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            // TODO: Allow user to present a alloc! function.
             storage: [0; STORAGE_SIZE],
             page_bitmap: [0; NUM_PAGES.div_ceil(32)],
         }
@@ -128,6 +129,106 @@ impl MemoryFs {
         self.entries[index].name = new_name;
         Ok(())
     }
+    /// Append data to file.
+    ///
+    ///
+    pub fn append(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
+        self.append_impl(name, data, true)
+    }
+    /// Append data to file.
+    ///
+    /// This function forces the data to be contiguous in memory.
+    ///
+    /// Use append_strict_or_repack if allowed to move data around to keep memory contiguous
+    pub fn append_strict(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
+        self.append_impl(name, data, false)
+    }
+    /// Similiar to append_strict, but allows data to be moved/repacked to ensure memory stays contiguous
+    pub fn append_strict_or_repack(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
+        self.append_impl(name, data, true)
+    }
+    fn append_impl(&mut self, name: &str, data: &[u8], repack: bool) -> Result<(), FsErr> {
+        // No Op
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        // Find file and check flags.
+        let index = self.find_file_index(name)?;
+        let entry = &self.entries[index];
+
+        if entry.flags.contains(FileFlags::IMMUTABLE) {
+            return Err(FsErr::ReadOnly);
+        }
+
+        // Current allocation and required space.
+        let current_extent = self.entries[index].extent;
+        let current_capacity = current_extent.len_pages * PAGE_SIZE;
+        let required_size = self.entries[index].size + data.len();
+
+        // FIXME: DEBUG ONLY
+        println!("available_space: {}", current_capacity);
+        println!("needed_space: {}, ", required_size);
+
+        // Case 1: Fits current allocation.
+        if required_size <= current_capacity {
+            let offset = (current_extent.start_page * PAGE_SIZE) + self.entries[index].size;
+            self.storage[offset..offset + data.len()].copy_from_slice(data);
+            self.entries[index].size += data.len();
+
+            return Ok(());
+        }
+
+        let required_pages = required_size.div_ceil(PAGE_SIZE);
+        let extra_pages = required_pages.saturating_sub(current_extent.len_pages);
+
+        assert!(extra_pages > 0);
+
+        // Case 2: Can we extent the page?
+        let next_page = current_extent.start_page + current_extent.len_pages;
+        if let Some(neighbour) = self.check_neighbour_pages_free(next_page, extra_pages) {
+            self.mark_pages(neighbour.start_page, neighbour.len_pages, true);
+            self.entries[index].extent = Extent {
+                start_page: current_extent.start_page,
+                len_pages: current_extent.len_pages + neighbour.len_pages,
+            };
+
+            let offset = (current_extent.start_page * PAGE_SIZE) + self.entries[index].size;
+            self.storage[offset..offset + data.len()].copy_from_slice(data);
+            self.entries[index].size = required_size;
+            return Ok(());
+        };
+
+        // Case 3: Relocate (repack) if allowed.
+        if repack {
+            if let Some(new_extent) = self.find_free_pages(required_pages) {
+                let old_start = current_extent.start_page * PAGE_SIZE;
+                let old_len = self.entries[index].size;
+                let old_range = old_start..old_start + old_len;
+
+                let new_start = new_extent.start_page * PAGE_SIZE;
+
+                self.mark_pages(new_extent.start_page, new_extent.len_pages, true);
+
+                // Move exsisting bytes
+                if old_len > 0 && old_start != new_start {
+                    self.storage.copy_within(old_range, new_start);
+                }
+
+                // Append new bytes.
+                let append_offset = new_start + old_len;
+                self.storage[append_offset..append_offset + data.len()].copy_from_slice(data);
+
+                self.mark_pages(current_extent.start_page, current_extent.len_pages, false);
+
+                self.entries[index].extent = new_extent;
+                self.entries[index].size = required_size;
+                return Ok(());
+            }
+        }
+        // Can't extend and repack is not allowed.
+        Err(FsErr::WouldFragment)
+    }
     pub fn delete(&mut self, name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
         if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
@@ -160,6 +261,8 @@ impl MemoryFs {
 
     // First-fit run search.
     fn find_free_pages(&self, need_pages: usize) -> Option<Extent> {
+        // TODO: Should this assert be here?
+        // assert_ne!(need_pages, 0);
         let mut run_start = None; //TODO: Use previous alloction marker, potentially speeds up search.
         let mut run_len = 0;
 
@@ -178,6 +281,27 @@ impl MemoryFs {
             } else {
                 run_start = None;
                 run_len = 0;
+            }
+        }
+        None
+    }
+    // Check if next pages are free. Early return if not the case.
+    fn check_neighbour_pages_free(&self, start: usize, need_pages: usize) -> Option<Extent> {
+        assert!(start <= NUM_PAGES);
+        assert_ne!(need_pages, 0);
+        let mut run_len = 0;
+
+        for page in start..NUM_PAGES {
+            if self.page_is_free(page) {
+                run_len += 1;
+            } else {
+                return None;
+            }
+            if run_len >= need_pages {
+                return Some(Extent {
+                    start_page: start,
+                    len_pages: run_len,
+                });
             }
         }
         None
