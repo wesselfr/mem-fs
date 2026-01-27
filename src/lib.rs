@@ -259,6 +259,10 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Ok(())
     }
 
+    pub fn entries(&self) -> impl Iterator<Item = &FileEntry> {
+        self.entries.iter()
+    }
+
     // Page allocator functions
     fn page_is_free(&self, page: usize) -> bool {
         (self.page_bitmap[page / 32] & (1 << (page % 32))) == 0

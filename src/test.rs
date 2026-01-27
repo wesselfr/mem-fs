@@ -30,6 +30,22 @@ mod tests {
     }
 
     #[test]
+    fn iter_files() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"file_1").unwrap();
+        fs.create("bar", b"file_2").unwrap();
+
+        let entries: Vec<_> = fs.entries().collect();
+
+        assert_eq!(entries.len(), 2);
+
+        let names: Vec<_> = entries.iter().map(|f| f.name.as_str()).collect();
+
+        assert!(names.contains(&"foo"));
+        assert!(names.contains(&"bar"));
+    }
+
+    #[test]
     fn file_exists() {
         let mut fs = MemFs::new();
         fs.create("foo", b"test").expect("Failed to create file.");
