@@ -154,7 +154,6 @@ mod tests {
     #[test]
     fn large_file() {
         let mut fs = MemFs::new();
-        // FIXME: Use actual storage limit.
         let data = [255; mem_fs::DEFAULT_STORAGE_SIZE];
         fs.create("foo", &data).unwrap();
     }

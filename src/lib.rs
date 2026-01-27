@@ -57,18 +57,26 @@ pub struct MemoryFs<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> {
     page_bitmap: heapless::Vec<u32, MAX_PAGE_BITMAP_WORDS>,
 }
 
+impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> Default
+    for MemoryFs<STORAGE_SIZE, PAGE_SIZE>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, PAGE_SIZE> {
-    fn num_pages() -> usize {
+    const fn num_pages() -> usize {
         STORAGE_SIZE / PAGE_SIZE
     }
 
-    fn bitmap_words() -> usize {
-        (Self::num_pages() + 31) / 32
+    const fn bitmap_words() -> usize {
+        Self::num_pages().div_ceil(32)
     }
 
     pub fn new() -> Self {
         assert!(PAGE_SIZE > 0);
-        assert!(STORAGE_SIZE % PAGE_SIZE == 0);
+        assert!(STORAGE_SIZE.is_multiple_of(PAGE_SIZE));
 
         let mut page_bitmap: heapless::Vec<u32, MAX_PAGE_BITMAP_WORDS> = heapless::Vec::new();
         let words = Self::bitmap_words();
@@ -139,7 +147,7 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         })
     }
     pub fn exists(&self, name: &str) -> bool {
-        self.entries.iter().find(|f| f.name == name).is_some()
+        self.entries.iter().any(|f| f.name == name)
     }
     pub fn rename(&mut self, name: &str, new_name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
