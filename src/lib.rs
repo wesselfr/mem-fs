@@ -138,6 +138,9 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
             &self.storage[f.extent.start_page * PAGE_SIZE..f.extent.start_page * PAGE_SIZE + f.size]
         })
     }
+    pub fn exists(&self, name: &str) -> bool {
+        self.entries.iter().find(|f| f.name == name).is_some()
+    }
     pub fn rename(&mut self, name: &str, new_name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
         let new_name = self.validate_file_name(

@@ -30,7 +30,20 @@ mod tests {
     }
 
     #[test]
-    fn read_non_exsisting_file() {
+    fn file_exists() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"test").expect("Failed to create file.");
+        assert_eq!(fs.exists("foo"), true);
+    }
+
+    #[test]
+    fn file_not_existsing() {
+        let fs = MemFs::new();
+        assert_eq!(fs.exists("foo"), false);
+    }
+
+    #[test]
+    fn read_non_existing_file() {
         let fs = MemFs::new();
         assert!(fs.read("foo").is_none());
     }
