@@ -271,6 +271,49 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         self.entries.iter()
     }
 
+    // Dump / Restore
+    pub fn dump<W: FnMut(&[u8])>(&self, mut write: W) -> Result<(), FsErr> {
+        write(b"MEMFS"); // Magic
+        write(&[1u8]); // Version
+        write(&PAGE_SIZE.to_le_bytes());
+
+        let num_pages: u32 = Self::num_pages() as u32;
+        write(&num_pages.to_le_bytes());
+
+        // Entries
+        let entry_count: u32 = self.entries.len() as u32;
+        write(&entry_count.to_le_bytes());
+
+        for file in &self.entries {
+            let name_bytes = file.name.as_str().as_bytes();
+            let name_len: u16 = name_bytes
+                .len()
+                .try_into()
+                .map_err(|_| FsErr::FileNameInvalid("DUMP"))?; // or NameTooLong
+            write(&name_len.to_le_bytes());
+            write(name_bytes);
+
+            write(&(file.size as u32).to_le_bytes());
+            write(&file.flags.bits().to_le_bytes());
+            write(&(file.extent.start_page as u32).to_le_bytes());
+            write(&(file.extent.len_pages as u32).to_le_bytes());
+        }
+
+        // Page bitmap
+        let bm_len: u32 = self.page_bitmap.len() as u32;
+        write(&bm_len.to_le_bytes());
+        for line in &self.page_bitmap {
+            write(&line.to_le_bytes());
+        }
+
+        // Data
+        let storage_len: u32 = self.storage.len() as u32;
+        write(&storage_len.to_le_bytes());
+        write(&self.storage);
+
+        Ok(())
+    }
+
     // Page allocator functions
     fn page_is_free(&self, page: usize) -> bool {
         (self.page_bitmap[page / 32] & (1 << (page % 32))) == 0
