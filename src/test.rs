@@ -165,6 +165,100 @@ mod tests {
         assert!(fs.create("foo", &data).is_err());
     }
 
+    mod persistence {
+        use mem_fs::DEFAULT_STORAGE_SIZE;
+        use mem_fs::FsErr;
+        use mem_fs::MemFs;
+
+        fn dump_to_vec(fs: &MemFs) -> Vec<u8> {
+            let mut out = Vec::new();
+            fs.dump(|chunk| out.extend_from_slice(chunk)).unwrap();
+            out
+        }
+
+        fn restore_from_slice(fs: &mut MemFs, data: &[u8]) -> Result<(), FsErr> {
+            let mut pos = 0usize;
+            fs.restore(|buf| {
+                let end = pos + buf.len();
+                if end > data.len() {
+                    return Err(FsErr::Corrupt);
+                }
+                buf.copy_from_slice(&data[pos..end]);
+                pos = end;
+                Ok(())
+            })
+        }
+
+        #[test]
+        fn dump_restore_roundtrip_basic() {
+            let mut fs = MemFs::new();
+            fs.create("foo", b"hello").unwrap();
+            fs.create("bar", b"world!!").unwrap();
+
+            let data = dump_to_vec(&fs);
+
+            let mut fs2 = MemFs::new();
+            restore_from_slice(&mut fs2, &data).unwrap();
+
+            assert_eq!(fs2.read("foo").unwrap(), b"hello");
+            assert_eq!(fs2.read("bar").unwrap(), b"world!!");
+        }
+
+        #[test]
+        fn dump_restore_empty_fs() {
+            let fs = MemFs::new();
+            let data = dump_to_vec(&fs);
+
+            let mut fs2 = MemFs::new();
+            restore_from_slice(&mut fs2, &data).unwrap();
+
+            assert_eq!(fs2.entries().count(), 0);
+        }
+
+        #[test]
+        fn restore_rejects_bad_magic() {
+            let fs = MemFs::new();
+            let mut data = dump_to_vec(&fs);
+
+            data[0] ^= 0xFF; // corrupt first magic byte
+
+            let mut fs2 = MemFs::new();
+            assert!(matches!(
+                restore_from_slice(&mut fs2, &data),
+                Err(FsErr::Corrupt)
+            ));
+        }
+
+        #[test]
+        fn restore_rejects_truncated_dump() {
+            let mut fs = MemFs::new();
+            fs.create("foo", b"hello").unwrap();
+
+            let data = dump_to_vec(&fs);
+            let truncated = &data[..data.len() - 1];
+
+            let mut fs2 = MemFs::new();
+            assert!(restore_from_slice(&mut fs2, truncated).is_err());
+        }
+
+        #[test]
+        fn restore_rejects_storage_len_mismatch() {
+            let fs = MemFs::new();
+            let mut data = dump_to_vec(&fs);
+
+            // Patch storage_len (last 4 bytes before storage).
+            // Since storage is the final block, storage_len starts at: data.len() - STORAGE_SIZE - 4
+            let off = data.len() - DEFAULT_STORAGE_SIZE - 4;
+            let bad = (DEFAULT_STORAGE_SIZE as u32 - 1).to_le_bytes();
+            data[off..off + 4].copy_from_slice(&bad);
+
+            let mut fs2 = MemFs::new();
+            assert!(matches!(
+                restore_from_slice(&mut fs2, &data),
+                Err(FsErr::Corrupt)
+            ));
+        }
+    }
     #[cfg(not(feature = "std"))]
     #[test]
     fn no_std_builds() {
