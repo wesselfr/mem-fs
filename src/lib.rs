@@ -208,6 +208,63 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         }
     }
 
+    /// Write content to a exsisting file at a given offset.
+    ///
+    /// If data exceeds currently allocated size, the file will grow in place.
+    pub fn write_at(&mut self, name: &str, offset: usize, data: &[u8]) -> Result<(), FsErr> {
+        // No Op
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        // Find file and check flags.
+        let index = self.find_file_index(name)?;
+        let entry = &self.entries[index];
+
+        if entry.flags.contains(FileFlags::IMMUTABLE) {
+            return Err(FsErr::ReadOnly);
+        }
+
+        // No hole check
+        if offset > entry.size {
+            return Err(FsErr::InvalidOp);
+        }
+
+        let current_extent = self.entries[index].extent;
+        let current_capacity = current_extent.len_pages * PAGE_SIZE;
+
+        let write_end = offset + data.len();
+        // Try growing into neighbouring space.
+        if write_end > current_capacity {
+            let required_pages = write_end.div_ceil(PAGE_SIZE);
+            let extra_pages = required_pages - current_extent.len_pages;
+
+            assert!(extra_pages > 0);
+
+            if let Some(neighbour_extent) = self.check_neighbour_pages_free(
+                current_extent.start_page + current_extent.len_pages,
+                extra_pages,
+            ) {
+                self.mark_pages(
+                    neighbour_extent.start_page,
+                    neighbour_extent.len_pages,
+                    true,
+                );
+
+                self.entries[index].extent.len_pages += neighbour_extent.len_pages;
+            } else {
+                return Err(FsErr::WouldFragment);
+            }
+        }
+
+        let start = current_extent.start_page * PAGE_SIZE + offset;
+
+        self.storage[start..start + data.len()].copy_from_slice(data);
+        self.entries[index].size = self.entries[index].size.max(offset + data.len());
+
+        Ok(())
+    }
+
     /// Append data to file.
     ///
     ///
