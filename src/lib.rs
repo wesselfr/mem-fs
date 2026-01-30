@@ -31,7 +31,7 @@ bitflags::bitflags! {
         const IMMUTABLE=1<<0; // reject write/append/delete
         const DO_NOT_FRAGMENT=1<<1; // append must stay contiguous or fail
         const CHECKSUMMED=1<<2; // verify on read (unimplemented)
-        const APPEND_ONLY=1<<3; // no write_at (unimplemented)
+        const APPEND_ONLY=1<<3; // no write_at
         const SEALED_NAMES=1<<4; // no rename allowed
     }
 }
@@ -226,7 +226,7 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         }
 
         // No hole check
-        if offset > entry.size {
+        if offset > entry.size || entry.flags.contains(FileFlags::APPEND_ONLY) {
             return Err(FsErr::InvalidOp);
         }
 
@@ -359,6 +359,41 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         // Can't extend and repack is not allowed.
         Err(FsErr::WouldFragment)
     }
+
+    pub fn truncate(&mut self, name: &str, new_size: usize) -> Result<(), FsErr> {
+        // Find file and check flags.
+        let index = self.find_file_index(name)?;
+        let entry = &self.entries[index];
+
+        if entry.flags.contains(FileFlags::IMMUTABLE) {
+            return Err(FsErr::ReadOnly);
+        }
+
+        if new_size > entry.size || new_size == 0 {
+            return Err(FsErr::InvalidOp);
+        }
+
+        // Free unused pages
+        let current_pages = entry.extent.len_pages;
+        let required_pages = new_size.div_ceil(PAGE_SIZE);
+
+        if required_pages < current_pages {
+            let unused = Extent {
+                start_page: entry.extent.start_page + required_pages,
+                len_pages: entry.extent.len_pages - required_pages,
+            };
+            self.mark_pages(unused.start_page, unused.len_pages, false);
+        }
+
+        self.entries[index].extent = Extent {
+            start_page: self.entries[index].extent.start_page,
+            len_pages: required_pages,
+        };
+        self.entries[index].size = new_size;
+
+        Ok(())
+    }
+
     pub fn delete(&mut self, name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
         if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {

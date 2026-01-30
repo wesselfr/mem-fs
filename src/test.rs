@@ -159,6 +159,15 @@ mod tests {
     }
 
     #[test]
+    fn truncate_file() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello World!").unwrap();
+        fs.truncate("foo", 5).unwrap();
+
+        assert_eq!(fs.read("foo").unwrap(), b"Hello");
+    }
+
+    #[test]
     fn append_file() {
         let mut fs = MemFs::new();
         fs.create("foo", b"").unwrap();
