@@ -159,6 +159,55 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         self.entries[index].name = new_name;
         Ok(())
     }
+
+    /// Replace the entire contents of a file.
+    ///
+    /// Will create the file if it doesn't exsist yet.
+    pub fn write(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
+        if let Ok(index) = self.find_file_index(name) {
+            // Check file flags
+            if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
+                return Err(FsErr::ReadOnly);
+            }
+
+            let required_pages = data.len().div_ceil(PAGE_SIZE);
+
+            // Find new extent if needed
+            if required_pages > self.entries[index].extent.len_pages {
+                // Unmark old pages
+                let old_extent = self.entries[index].extent;
+                self.mark_pages(old_extent.start_page, old_extent.len_pages, false);
+
+                let extent = self.find_free_pages(required_pages);
+
+                if let Some(extent) = extent {
+                    self.mark_pages(extent.start_page, extent.len_pages, true);
+
+                    self.entries[index].extent = extent;
+                    self.entries[index].size = data.len();
+
+                    let offset = extent.start_page * PAGE_SIZE;
+                    self.storage[offset..offset + data.len()].copy_from_slice(data);
+                } else {
+                    // Search failed, remark pages.
+                    self.mark_pages(old_extent.start_page, old_extent.len_pages, true);
+
+                    return Err(FsErr::NoSpace);
+                }
+            } else {
+                self.entries[index].size = data.len();
+
+                let offset = self.entries[index].extent.start_page * PAGE_SIZE;
+                self.storage[offset..offset + data.len()].copy_from_slice(data);
+            };
+
+            return Ok(());
+        } else {
+            // File does not exsist.
+            return self.create(name, data);
+        }
+    }
+
     /// Append data to file.
     ///
     ///
