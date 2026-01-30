@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use mem_fs::FileFlags;
     use mem_fs::FsErr;
     use mem_fs::MemFs;
 
@@ -106,6 +107,55 @@ mod tests {
         fs.create("b", b"file_2").expect("Failed to create file.");
 
         assert!(matches!(fs.rename("b", "a"), Err(FsErr::Duplicate)));
+    }
+
+    #[test]
+    fn write_file() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello").unwrap();
+        fs.write("foo", b"World!").unwrap();
+
+        assert_eq!(fs.read("foo").unwrap(), b"World!");
+    }
+
+    #[test]
+    fn write_at_file() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello World!").unwrap();
+        fs.write_at("foo", 6, b"Rust!").unwrap();
+
+        assert_eq!(fs.read("foo").unwrap(), b"Hello Rust!!");
+    }
+
+    #[test]
+    fn write_respects_immutable_flag() {
+        let mut fs = MemFs::new();
+
+        fs.create_with_flags("foo", &[1u8; 10], FileFlags::IMMUTABLE)
+            .unwrap();
+
+        let err = fs.write("foo", &[2u8; 10]).unwrap_err();
+        assert!(matches!(err, FsErr::ReadOnly));
+
+        let err = fs.write_at("foo", 0, &[3u8; 1]).unwrap_err();
+        assert!(matches!(err, FsErr::ReadOnly));
+    }
+
+    #[test]
+    fn write_at_empty_is_noop() {
+        let mut fs = MemFs::new();
+        fs.create("foo", &[1u8; 10]).unwrap();
+
+        fs.write_at("foo", 0, &[]).unwrap();
+        assert_eq!(fs.read("foo").unwrap(), &[1u8; 10]);
+    }
+
+    #[test]
+    fn write_create_if_missing() {
+        let mut fs = MemFs::new();
+        fs.write("foo", &[4u8; 12]).unwrap();
+
+        assert_eq!(fs.read("foo").unwrap(), &[4u8; 12]);
     }
 
     #[test]
