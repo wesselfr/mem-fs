@@ -1,6 +1,6 @@
 [package]
 name = "mem-fs"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 license = "MIT"
 
@@ -10,5 +10,6 @@ std = []
 
 [dependencies]
 bitflags = "2.10.0"
+crc = "3.4.0"
 heapless = { version = "0.8", default-features = false }
 
