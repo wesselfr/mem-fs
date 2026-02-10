@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::str::FromStr;
+use crc::{CRC_32_CKSUM, Crc, NoTable};
 use heapless::{String, Vec};
 
 const MAX_FILE_NAME_LENGTH: usize = 255;
@@ -48,6 +49,12 @@ pub struct FileEntry {
     pub size: usize,
     flags: FileFlags,
     extent: Extent,
+}
+
+impl FileEntry {
+    const fn serialized_max_size() -> usize {
+        18 + MAX_FILE_NAME_LENGTH
+    }
 }
 
 pub type MemFs = MemoryFs<DEFAULT_STORAGE_SIZE, DEFAULT_PAGE_SIZE>;
@@ -413,37 +420,77 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
     }
 
     // Dump / Restore
+    const fn serialized_header_size() -> usize {
+        5  // "MEMFS"
+        + 1  // version
+        + 4  // page size (u32)
+        + 4  // num_pages (u32)
+        + 4 // entry_count (u32)
+    }
+
+    const fn serialized_footer_size() -> usize {
+        8 // "MEMFSEND"
+        + 4 // total_len (u32)
+        + 4 // checksum (u32)
+    }
+
+    pub const fn serialized_max_size() -> usize {
+        Self::serialized_header_size()
+        + MAX_NUM_FILES * FileEntry::serialized_max_size()
+        + 4 // storage_len (u32)
+        + STORAGE_SIZE
+        + Self::serialized_footer_size()
+    }
+
     pub fn dump<W: FnMut(&[u8])>(&self, mut write: W) -> Result<(), FsErr> {
-        write(b"MEMFS"); // Magic
-        write(&[1u8]); // Version
-        write(&(PAGE_SIZE as u32).to_le_bytes());
+        let crc = Crc::<u32, NoTable>::new(&CRC_32_CKSUM);
+        let mut digest = crc.digest();
+        let mut total_len: u32 = 0;
 
-        let num_pages: u32 = Self::num_pages() as u32;
-        write(&num_pages.to_le_bytes());
+        {
+            let mut write = |bytes: &[u8]| {
+                digest.update(bytes);
+                write(bytes);
+                total_len = total_len.wrapping_add(bytes.len() as u32);
+            };
 
-        // Entries
-        let entry_count: u32 = self.entries.len() as u32;
-        write(&entry_count.to_le_bytes());
+            // Header
+            write(b"MEMFS"); // Magic
+            write(&[2u8]); // Version
+            write(&(PAGE_SIZE as u32).to_le_bytes());
 
-        for file in &self.entries {
-            let name_bytes = file.name.as_str().as_bytes();
-            let name_len: u16 = name_bytes
-                .len()
-                .try_into()
-                .map_err(|_| FsErr::FileNameInvalid("Invalid filename"))?;
-            write(&name_len.to_le_bytes());
-            write(name_bytes);
+            let num_pages: u32 = Self::num_pages() as u32;
+            write(&num_pages.to_le_bytes());
 
-            write(&(file.size as u32).to_le_bytes());
-            write(&file.flags.bits().to_le_bytes());
-            write(&(file.extent.start_page as u32).to_le_bytes());
-            write(&(file.extent.len_pages as u32).to_le_bytes());
+            // Entries
+            let entry_count: u32 = self.entries.len() as u32;
+            write(&entry_count.to_le_bytes());
+
+            for file in &self.entries {
+                let name_bytes = file.name.as_str().as_bytes();
+                let name_len: u16 = name_bytes
+                    .len()
+                    .try_into()
+                    .map_err(|_| FsErr::FileNameInvalid("Invalid filename"))?;
+                write(&name_len.to_le_bytes());
+                write(name_bytes);
+
+                write(&(file.size as u32).to_le_bytes());
+                write(&file.flags.bits().to_le_bytes());
+                write(&(file.extent.start_page as u32).to_le_bytes());
+                write(&(file.extent.len_pages as u32).to_le_bytes());
+            }
+
+            // Data
+            let storage_len: u32 = self.storage.len() as u32;
+            write(&storage_len.to_le_bytes());
+            write(&self.storage);
         }
 
-        // Data
-        let storage_len: u32 = self.storage.len() as u32;
-        write(&storage_len.to_le_bytes());
-        write(&self.storage);
+        // Footer
+        write(b"MEMFSEND");
+        write(&total_len.to_le_bytes());
+        write(&digest.finalize().to_le_bytes());
 
         Ok(())
     }
@@ -452,110 +499,146 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
     where
         R: FnMut(&mut [u8]) -> Result<(), FsErr>,
     {
-        let mut magic = [0u8; 5];
-        let mut version = [0u8; 1];
+        let crc = Crc::<u32, NoTable>::new(&CRC_32_CKSUM);
+        let mut digest = crc.digest();
+        let mut total_len: u32 = 0;
 
-        read(&mut magic)?;
-        read(&mut version)?;
+        {
+            let mut read = |buf: &mut [u8]| -> Result<(), FsErr> {
+                read(buf)?;
+                digest.update(buf);
+                total_len = total_len.wrapping_add(buf.len() as u32);
+                Ok(())
+            };
 
-        // Validate Header
-        if &magic != b"MEMFS" || version[0] != 1 {
-            return Err(FsErr::Corrupt);
-        }
+            let mut magic = [0u8; 5];
+            let mut version = [0u8; 1];
 
-        // Validate Sizes
-        let mut page_size = [0u8; size_of::<u32>()];
-        read(&mut page_size)?;
-        let page_size = u32::from_le_bytes(page_size);
-        if page_size as usize != PAGE_SIZE {
-            return Err(FsErr::Corrupt);
-        }
+            read(&mut magic)?;
+            read(&mut version)?;
 
-        let mut num_pages = [0u8; size_of::<u32>()];
-        let mut num_entries = [0u8; size_of::<u32>()];
-
-        read(&mut num_pages)?;
-        read(&mut num_entries)?;
-
-        let num_pages = u32::from_le_bytes(num_pages);
-        let num_entries = u32::from_le_bytes(num_entries);
-
-        if num_pages as usize != Self::num_pages() {
-            return Err(FsErr::Corrupt);
-        }
-
-        if !self.entries.is_empty() {
-            return Err(FsErr::InvalidOp);
-        }
-
-        for _ in 0..num_entries {
-            let mut name_len = [0u8; size_of::<u16>()];
-            let mut name_bytes = [0u8; MAX_FILE_NAME_LENGTH];
-
-            read(&mut name_len)?;
-            let name_len = u16::from_le_bytes(name_len) as usize;
-            if name_len == 0 || name_len > MAX_FILE_NAME_LENGTH {
-                return Err(FsErr::Corrupt);
-            }
-            read(&mut name_bytes[..name_len])?;
-
-            let name = str::from_utf8(&name_bytes[..name_len]).map_err(|_| FsErr::Corrupt)?;
-
-            let mut file_size = [0u8; size_of::<u32>()];
-            let mut file_flags = [0u8; size_of::<u32>()];
-            let mut file_extent_start = [0u8; size_of::<u32>()];
-            let mut file_extent_len = [0u8; size_of::<u32>()];
-
-            read(&mut file_size)?;
-            read(&mut file_flags)?;
-            read(&mut file_extent_start)?;
-            read(&mut file_extent_len)?;
-
-            let file_size = u32::from_le_bytes(file_size);
-            let file_flags = u32::from_le_bytes(file_flags);
-            let file_extent_start = u32::from_le_bytes(file_extent_start) as usize;
-            let file_extent_len = u32::from_le_bytes(file_extent_len) as usize;
-
-            // Sanity checks
-            if file_extent_len == 0 {
-                return Err(FsErr::Corrupt);
-            }
-            let cap = file_extent_len
-                .checked_mul(PAGE_SIZE)
-                .ok_or(FsErr::Corrupt)?;
-            if (file_size as usize) > cap {
-                return Err(FsErr::Corrupt);
-            }
-            let end = file_extent_start
-                .checked_add(file_extent_len)
-                .ok_or(FsErr::Corrupt)?;
-            if end > num_pages as usize {
+            // Validate Header
+            if &magic != b"MEMFS" || version[0] != 2 {
                 return Err(FsErr::Corrupt);
             }
 
-            self.entries
-                .push(FileEntry {
-                    name: heapless::String::from_str(name).map_err(|_| FsErr::Corrupt)?,
-                    size: file_size as usize,
-                    flags: FileFlags::from_bits_truncate(file_flags),
-                    extent: Extent {
-                        start_page: file_extent_start,
-                        len_pages: file_extent_len,
-                    },
-                })
-                .map_err(|_| FsErr::Corrupt)?;
+            // Validate Sizes
+            let mut page_size = [0u8; size_of::<u32>()];
+            read(&mut page_size)?;
+            let page_size = u32::from_le_bytes(page_size);
+            if page_size as usize != PAGE_SIZE {
+                return Err(FsErr::Corrupt);
+            }
 
-            self.mark_pages(file_extent_start, file_extent_len, true);
+            let mut num_pages = [0u8; size_of::<u32>()];
+            let mut num_entries = [0u8; size_of::<u32>()];
+
+            read(&mut num_pages)?;
+            read(&mut num_entries)?;
+
+            let num_pages = u32::from_le_bytes(num_pages);
+            let num_entries = u32::from_le_bytes(num_entries);
+
+            if num_pages as usize != Self::num_pages() {
+                return Err(FsErr::Corrupt);
+            }
+
+            if !self.entries.is_empty() {
+                return Err(FsErr::InvalidOp);
+            }
+
+            for _ in 0..num_entries {
+                let mut name_len = [0u8; size_of::<u16>()];
+                let mut name_bytes = [0u8; MAX_FILE_NAME_LENGTH];
+
+                read(&mut name_len)?;
+                let name_len = u16::from_le_bytes(name_len) as usize;
+                if name_len == 0 || name_len > MAX_FILE_NAME_LENGTH {
+                    return Err(FsErr::Corrupt);
+                }
+                read(&mut name_bytes[..name_len])?;
+
+                let name = str::from_utf8(&name_bytes[..name_len]).map_err(|_| FsErr::Corrupt)?;
+
+                let mut file_size = [0u8; size_of::<u32>()];
+                let mut file_flags = [0u8; size_of::<u32>()];
+                let mut file_extent_start = [0u8; size_of::<u32>()];
+                let mut file_extent_len = [0u8; size_of::<u32>()];
+
+                read(&mut file_size)?;
+                read(&mut file_flags)?;
+                read(&mut file_extent_start)?;
+                read(&mut file_extent_len)?;
+
+                let file_size = u32::from_le_bytes(file_size);
+                let file_flags = u32::from_le_bytes(file_flags);
+                let file_extent_start = u32::from_le_bytes(file_extent_start) as usize;
+                let file_extent_len = u32::from_le_bytes(file_extent_len) as usize;
+
+                // Sanity checks
+                if file_extent_len == 0 {
+                    return Err(FsErr::Corrupt);
+                }
+                let cap = file_extent_len
+                    .checked_mul(PAGE_SIZE)
+                    .ok_or(FsErr::Corrupt)?;
+                if (file_size as usize) > cap {
+                    return Err(FsErr::Corrupt);
+                }
+                let end = file_extent_start
+                    .checked_add(file_extent_len)
+                    .ok_or(FsErr::Corrupt)?;
+                if end > num_pages as usize {
+                    return Err(FsErr::Corrupt);
+                }
+
+                self.entries
+                    .push(FileEntry {
+                        name: heapless::String::from_str(name).map_err(|_| FsErr::Corrupt)?,
+                        size: file_size as usize,
+                        flags: FileFlags::from_bits_truncate(file_flags),
+                        extent: Extent {
+                            start_page: file_extent_start,
+                            len_pages: file_extent_len,
+                        },
+                    })
+                    .map_err(|_| FsErr::Corrupt)?;
+
+                self.mark_pages(file_extent_start, file_extent_len, true);
+            }
+
+            // Storage data
+            let mut storage_len = [0u8; size_of::<u32>()];
+            read(&mut storage_len)?;
+            let storage_len = u32::from_le_bytes(storage_len) as usize;
+            if storage_len != STORAGE_SIZE {
+                return Err(FsErr::Corrupt);
+            }
+            read(&mut self.storage[..storage_len])?;
         }
 
-        // Storage data
-        let mut storage_len = [0u8; size_of::<u32>()];
-        read(&mut storage_len)?;
-        let storage_len = u32::from_le_bytes(storage_len) as usize;
-        if storage_len != STORAGE_SIZE {
+        let mut footer_magic = [0u8; 8];
+        let mut footer_len = [0u8; size_of::<u32>()];
+        let mut footer_crc = [0u8; size_of::<u32>()];
+
+        read(&mut footer_magic)?;
+        read(&mut footer_len)?;
+        read(&mut footer_crc)?;
+
+        if &footer_magic != b"MEMFSEND" {
             return Err(FsErr::Corrupt);
         }
-        read(&mut self.storage[..storage_len])?;
+
+        let expected_len = u32::from_le_bytes(footer_len);
+        if expected_len != total_len {
+            return Err(FsErr::Corrupt);
+        }
+
+        let expected_crc = u32::from_le_bytes(footer_crc);
+        let actual_crc = digest.finalize();
+        if expected_crc != actual_crc {
+            return Err(FsErr::Corrupt);
+        }
 
         Ok(())
     }
