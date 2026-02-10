@@ -50,6 +50,12 @@ pub struct FileEntry {
     extent: Extent,
 }
 
+impl FileEntry {
+    const fn serialized_max_size() -> usize {
+        18 + MAX_FILE_NAME_LENGTH
+    }
+}
+
 pub type MemFs = MemoryFs<DEFAULT_STORAGE_SIZE, DEFAULT_PAGE_SIZE>;
 pub struct MemoryFs<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> {
     entries: Vec<FileEntry, MAX_NUM_FILES>,
@@ -413,6 +419,20 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
     }
 
     // Dump / Restore
+    const fn serialized_header_size() -> usize {
+        5  // "MEMFS"
+        + 1  // version
+        + 4  // page size (u32)
+        + 4  // num_pages (u32)
+        + 4 // entry_count (u32)
+    }
+    pub const fn serialized_max_size() -> usize {
+        Self::serialized_header_size()
+        + MAX_NUM_FILES * FileEntry::serialized_max_size()
+        + 4 // storage_len (u32)
+        + STORAGE_SIZE
+    }
+
     pub fn dump<W: FnMut(&[u8])>(&self, mut write: W) -> Result<(), FsErr> {
         write(b"MEMFS"); // Magic
         write(&[1u8]); // Version
