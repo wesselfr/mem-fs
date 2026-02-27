@@ -661,8 +661,8 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
 
     // First-fit run search.
     fn find_free_pages(&self, need_pages: usize) -> Option<Extent> {
-        // TODO: Should this assert be here?
-        // assert_ne!(need_pages, 0);
+        assert_ne!(need_pages, 0);
+
         let mut run_start = None; //TODO: Use previous alloction marker, potentially speeds up search.
         let mut run_len = 0;
 
