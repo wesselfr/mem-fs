@@ -104,9 +104,35 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
     // File system operations
     // TODO: Implement a filesystem trait for these functions
     // TODO: Support atomic operations
+
+    /// Create a new file with default flags.
+    ///
+    /// The file name must be non-empty, contain no whitespace, and be unique.
+    /// Files are stored contiguously in page-backed storage.
+    ///
+    /// Creating an empty file is allowed. Empty files have `size == 0` and `extent == None`.
+    ///
+    /// # Errors
+    /// - `FsErr::FileNameInvalid` if the name is invalid or too long
+    /// - `FsErr::Duplicate` if the name already exists
+    /// - `FsErr::TooManyFiles` if the entry table is full
+    /// - `FsErr::TooManyExtents` if no contiguous run of pages is available
     pub fn create(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
         self.create_with_flags(name, data, FileFlags::empty())
     }
+
+    /// Create a new file with explicit `flags`.
+    ///
+    /// This is identical to `create`, but allows setting file behavior flags such as
+    /// `IMMUTABLE`, `APPEND_ONLY`, or `SEALED_NAMES`.
+    ///
+    /// Creating an empty file is allowed. Empty files have `size == 0` and `extent == None`.
+    ///
+    /// # Errors
+    /// - `FsErr::FileNameInvalid` if the name is invalid or too long
+    /// - `FsErr::Duplicate` if the name already exists
+    /// - `FsErr::TooManyFiles` if the entry table is full
+    /// - `FsErr::TooManyExtents` if no contiguous run of pages is available
     pub fn create_with_flags(
         &mut self,
         name: &str,
@@ -154,6 +180,16 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
 
         Ok(())
     }
+
+    /// Read the contents of a file.
+    ///
+    /// Returns a slice into the internal storage backing the filesystem.
+    ///
+    /// Empty files return an empty slice (`&[]`).
+    ///
+    /// # Returns
+    /// - `Some(&[u8])` if the file exists
+    /// - `None` if the file does not exist
     pub fn read(&self, name: &str) -> Option<&[u8]> {
         self.entries.iter().find(|f| f.name == name).map(|f| {
             if f.size == 0 {
@@ -166,10 +202,22 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         })
     }
 
+    /// Check whether a file exists.
+    ///
+    /// This checks for the presence of a file entry by name.
     pub fn exists(&self, name: &str) -> bool {
         self.entries.iter().any(|f| f.name == name)
     }
 
+    /// Rename an existing file.
+    ///
+    /// The new name must be non-empty, contain no whitespace, and be unique.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::FileNameSealed` if the file has `SEALED_NAMES`
+    /// - `FsErr::FileNameInvalid` if the new name is invalid or too long
+    /// - `FsErr::Duplicate` if `new_name` already exists
     pub fn rename(&mut self, name: &str, new_name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
 
@@ -188,7 +236,17 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
 
     /// Replace the entire contents of a file.
     ///
-    /// Will create the file if it doesn't exsist yet.
+    /// If the file does not exist, it is created with default flags.
+    ///
+    /// If `data` is empty, the file becomes empty (`size = 0`) and any allocated pages are freed.
+    ///
+    /// This operation may relocate the file to a new contiguous extent if the current allocation
+    /// is too small.
+    ///
+    /// # Errors
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::NoSpace` if the file cannot be allocated contiguously
+    /// - `FsErr::TooManyFiles` / `FsErr::Duplicate` / `FsErr::FileNameInvalid` (when creating)
     pub fn write(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
         let index = match self.find_file_index(name) {
             Ok(i) => i,
@@ -255,9 +313,27 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         return Ok(());
     }
 
-    /// Write content to a exsisting file at a given offset.
+    /// Write bytes to an existing file at the given `offset`.
     ///
-    /// If data exceeds currently allocated size, the file will grow in place.
+    /// This filesystem does not support holes:
+    /// - `offset > size` is rejected.
+    /// - `offset == size` is allowed and is equivalent to appending.
+    ///
+    /// If the write exceeds currently allocated capacity, the filesystem will attempt to grow
+    /// the file **in place** by consuming neighbouring free pages. If the neighbouring pages are
+    /// not free, the operation fails with `WouldFragment` (no relocation is performed here).
+    ///
+    /// For empty files (`extent == None`), only `offset == 0` is allowed; the call will allocate
+    /// a new extent and write the provided data.
+    ///
+    /// Passing an empty `data` slice is a no-op.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::InvalidOp` if `offset > size` or the file has `APPEND_ONLY`
+    /// - `FsErr::NoSpace` if allocation is required but no contiguous run exists
+    /// - `FsErr::WouldFragment` if growth would require non-contiguous allocation
     pub fn write_at(&mut self, name: &str, offset: usize, data: &[u8]) -> Result<(), FsErr> {
         // No Op
         if data.is_empty() {
@@ -342,21 +418,50 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Ok(())
     }
 
-    /// Append data to file.
+    /// Append data to a file.
     ///
+    /// This is the default append mode: it will keep the file contiguous, and may relocate
+    /// (repack) the file to a new contiguous extent if needed.
     ///
+    /// Passing an empty `data` slice is a no-op.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::NoSpace` if no contiguous run of pages is available
+    /// - `FsErr::WouldFragment` if contiguity cannot be maintained (when repack is not possible)
     pub fn append(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
         self.append_impl(name, data, true)
     }
-    /// Append data to file.
+    /// Append data to a file, requiring contiguous growth.
     ///
-    /// This function forces the data to be contiguous in memory.
+    /// This function forces the file to remain contiguous and does **not** relocate existing data.
+    /// If the file cannot be extended into neighbouring free pages, the operation fails.
     ///
-    /// Use append_strict_or_repack if allowed to move data around to keep memory contiguous
+    /// Passing an empty `data` slice is a no-op.
+    ///
+    /// Use `append_strict_or_repack` if relocation is allowed to preserve contiguity.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::NoSpace` if allocation is required and no contiguous run exists
+    /// - `FsErr::WouldFragment` if the file cannot be extended contiguously
     pub fn append_strict(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
         self.append_impl(name, data, false)
     }
-    /// Similiar to append_strict, but allows data to be moved/repacked to ensure memory stays contiguous
+    /// Append data to a file, keeping it contiguous and allowing relocation.
+    ///
+    /// This behaves like `append_strict`, but if neighbouring pages are not available, the file
+    /// may be moved (repacked) to a new contiguous extent large enough to hold the result.
+    ///
+    /// Passing an empty `data` slice is a no-op.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::NoSpace` if no contiguous run of pages is available
+    /// - `FsErr::WouldFragment` if contiguity cannot be maintained and repack is disabled
     pub fn append_strict_or_repack(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
         self.append_impl(name, data, true)
     }
@@ -454,6 +559,20 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Err(FsErr::WouldFragment)
     }
 
+    /// Shrink a file to `new_size` bytes.
+    ///
+    /// If `new_size` is smaller than the current size, the file size is reduced and any fully
+    /// unused pages at the end of the extent are returned to the free list.
+    ///
+    /// `truncate(name, 0)` frees the entire allocation and turns the file into an empty file
+    /// (`size = 0`, `extent = None`).
+    ///
+    /// This function does not support growing a file (preallocation).
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::InvalidOp` if `new_size` is greater than the current size
     pub fn truncate(&mut self, name: &str, new_size: usize) -> Result<(), FsErr> {
         // Find file and check flags.
         let index = self.find_file_index(name)?;
@@ -500,6 +619,14 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Ok(())
     }
 
+    /// Delete a file and free its allocated pages.
+    ///
+    /// Removing a file does not zero the underlying storage; freed pages may be reused and
+    /// overwritten by future allocations.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
     pub fn delete(&mut self, name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
         if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
@@ -516,6 +643,10 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Ok(())
     }
 
+    /// Iterate over all file entries.
+    ///
+    /// The iterator yields metadata only (name, size, flags, extent).
+    /// File contents can be accessed via `read()`.
     pub fn entries(&self) -> impl Iterator<Item = &FileEntry> {
         self.entries.iter()
     }
@@ -535,6 +666,10 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         + 4 // checksum (u32)
     }
 
+    /// Return the maximum serialized size of a filesystem dump.
+    ///
+    /// This is an upper bound that includes header, maximum number of entries, raw storage bytes,
+    /// and footer (magic, total length, checksum).
     pub const fn serialized_max_size() -> usize {
         Self::serialized_header_size()
         + MAX_NUM_FILES * FileEntry::serialized_max_size()
@@ -543,6 +678,15 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         + Self::serialized_footer_size()
     }
 
+    /// Serialize the filesystem into a byte stream.
+    ///
+    /// The dump includes:
+    /// - header (magic/version/page size/num pages)
+    /// - file table (name, size, flags, extent start/len)
+    /// - raw storage bytes
+    /// - footer (magic, total length, CRC32 checksum)
+    ///
+    /// The checksum covers everything except the footer itself.
     pub fn dump<W: FnMut(&[u8])>(&self, mut write: W) -> Result<(), FsErr> {
         let crc = Crc::<u32, NoTable>::new(&CRC_32_CKSUM);
         let mut digest = crc.digest();
@@ -596,6 +740,19 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Ok(())
     }
 
+    /// Restore the filesystem from a byte stream created by `dump()`.
+    ///
+    /// This validates:
+    /// - header magic/version
+    /// - page size and number of pages
+    /// - entry table sanity (sizes, extents, bounds)
+    /// - footer magic, total length, and CRC32 checksum
+    ///
+    /// The restore operation requires the filesystem to be empty.
+    ///
+    /// # Errors
+    /// - `FsErr::InvalidOp` if the filesystem already contains entries
+    /// - `FsErr::Corrupt` if the stream is malformed, inconsistent, or checksum validation fails
     pub fn restore<R>(&mut self, mut read: R) -> Result<(), FsErr>
     where
         R: FnMut(&mut [u8]) -> Result<(), FsErr>,
@@ -841,6 +998,11 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
     }
 
     // Debug
+
+    /// Print a list of files (debug helper).
+    ///
+    /// Shows each file's name, size, and start offset (or `NO DATA` for empty files).
+    /// Only available when compiled with the `std` feature.
     #[cfg(feature = "std")]
     pub fn list_files(&self) {
         println!("File entries:");
@@ -858,7 +1020,10 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         }
     }
 
-    /// Visualize the filesystem in hex format.
+    /// Print a hex dump of the raw storage (debug helper).
+    ///
+    /// Dumps `len` bytes starting at `start`, clamped to storage bounds.
+    /// Only available when compiled with the `std` feature.
     #[cfg(feature = "std")]
     pub fn hex_dump(&self, start: usize, len: usize) {
         let end = (start + len).min(STORAGE_SIZE);
