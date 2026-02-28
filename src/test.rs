@@ -142,6 +142,21 @@ mod tests {
     }
 
     #[test]
+    fn write_empty_frees_space_and_reads_empty() {
+        let mut fs = MemFs::new();
+
+        let big = [0xAAu8; mem_fs::DEFAULT_STORAGE_SIZE];
+        fs.create("big", &big).unwrap();
+
+        fs.write("big", b"").unwrap();
+        assert_eq!(fs.read("big").unwrap(), b"");
+
+        let big2 = [0xBBu8; mem_fs::DEFAULT_STORAGE_SIZE];
+        fs.create("big2", &big2).unwrap();
+        assert_eq!(fs.read("big2").unwrap(), &big2[..]);
+    }
+
+    #[test]
     fn write_at_empty_is_noop() {
         let mut fs = MemFs::new();
         fs.create("foo", &[1u8; 10]).unwrap();

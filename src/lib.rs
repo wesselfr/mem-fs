@@ -48,7 +48,7 @@ pub struct FileEntry {
     pub name: String<MAX_FILE_NAME_LENGTH>,
     pub size: usize,
     flags: FileFlags,
-    extent: Extent,
+    extent: Option<Extent>,
 }
 
 impl FileEntry {
@@ -118,12 +118,15 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         }
 
         let required_pages = data.len().div_ceil(PAGE_SIZE);
-        let extent = self.find_free_pages(required_pages);
-
-        if extent.is_none() {
-            return Err(FsErr::TooManyExtents);
+        let extent = if required_pages > 0 {
+            if let Some(extent) = self.find_free_pages(required_pages) {
+                Some(extent)
+            } else {
+                return Err(FsErr::TooManyExtents);
+            }
+        } else {
+            None
         };
-        let extent = extent.unwrap();
 
         let file_name: String<MAX_FILE_NAME_LENGTH> =
             String::from_str(name).expect("Error while processing filename");
@@ -141,21 +144,31 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
             // FIXME: FileEntry should not be a limiting factor for adding files, storage space should be the only limit.
             .map_err(|_| FsErr::TooManyFiles)?;
 
-        self.mark_pages(extent.start_page, extent.len_pages, true);
+        if let Some(extent) = extent {
+            self.mark_pages(extent.start_page, extent.len_pages, true);
 
-        let offset = extent.start_page * PAGE_SIZE;
-        self.storage[offset..offset + data.len()].copy_from_slice(data);
+            let offset = extent.start_page * PAGE_SIZE;
+            self.storage[offset..offset + data.len()].copy_from_slice(data);
+        }
 
         Ok(())
     }
     pub fn read(&self, name: &str) -> Option<&[u8]> {
         self.entries.iter().find(|f| f.name == name).map(|f| {
-            &self.storage[f.extent.start_page * PAGE_SIZE..f.extent.start_page * PAGE_SIZE + f.size]
+            if f.size == 0 {
+                &self.storage[0..0]
+            } else {
+                let e = f.extent.expect("non-empty file must have extent");
+                let start = e.start_page * PAGE_SIZE;
+                &self.storage[start..start + f.size]
+            }
         })
     }
+
     pub fn exists(&self, name: &str) -> bool {
         self.entries.iter().any(|f| f.name == name)
     }
+
     pub fn rename(&mut self, name: &str, new_name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
         let new_name = self.validate_file_name(
@@ -171,48 +184,69 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
     ///
     /// Will create the file if it doesn't exsist yet.
     pub fn write(&mut self, name: &str, data: &[u8]) -> Result<(), FsErr> {
-        if let Ok(index) = self.find_file_index(name) {
-            // Check file flags
-            if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
-                return Err(FsErr::ReadOnly);
+        let index = match self.find_file_index(name) {
+            Ok(i) => i,
+            Err(FsErr::NotFound) => return self.create(name, data),
+            Err(e) => return Err(e),
+        };
+
+        // Check file flags
+        if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
+            return Err(FsErr::ReadOnly);
+        }
+
+        let current_pages = self.entries[index].extent.map_or(0, |ext| ext.len_pages);
+        let required_pages = data.len().div_ceil(PAGE_SIZE);
+
+        // Free pages if data is empty
+        if required_pages == 0 {
+            if let Some(old_extent) = self.entries[index].extent.take() {
+                self.mark_pages(old_extent.start_page, old_extent.len_pages, false);
+            }
+            self.entries[index].size = 0;
+
+            return Ok(());
+        }
+
+        // Find new extent if needed
+        if required_pages > current_pages {
+            // Unmark old pages
+            let old_extent = self.entries[index].extent;
+
+            if let Some(old_extent) = old_extent {
+                self.mark_pages(old_extent.start_page, old_extent.len_pages, false);
             }
 
-            let required_pages = data.len().div_ceil(PAGE_SIZE);
-
-            // Find new extent if needed
-            if required_pages > self.entries[index].extent.len_pages {
-                // Unmark old pages
-                let old_extent = self.entries[index].extent;
-                self.mark_pages(old_extent.start_page, old_extent.len_pages, false);
-
-                let extent = self.find_free_pages(required_pages);
-
-                if let Some(extent) = extent {
+            let new_extent = self.find_free_pages(required_pages);
+            match new_extent {
+                Some(extent) => {
                     self.mark_pages(extent.start_page, extent.len_pages, true);
 
-                    self.entries[index].extent = extent;
+                    self.entries[index].extent = Some(extent);
                     self.entries[index].size = data.len();
 
                     let offset = extent.start_page * PAGE_SIZE;
                     self.storage[offset..offset + data.len()].copy_from_slice(data);
-                } else {
+                }
+                None => {
                     // Search failed, remark pages.
-                    self.mark_pages(old_extent.start_page, old_extent.len_pages, true);
-
+                    if let Some(old_extent) = old_extent {
+                        self.mark_pages(old_extent.start_page, old_extent.len_pages, true);
+                    }
                     return Err(FsErr::NoSpace);
                 }
-            } else {
-                self.entries[index].size = data.len();
-
-                let offset = self.entries[index].extent.start_page * PAGE_SIZE;
-                self.storage[offset..offset + data.len()].copy_from_slice(data);
-            };
-
-            return Ok(());
+            }
         } else {
-            // File does not exsist.
-            return self.create(name, data);
-        }
+            let extent = self.entries[index]
+                .extent
+                .expect("required_pages > 0 implies extent exists");
+
+            self.entries[index].size = data.len();
+            let offset = extent.start_page * PAGE_SIZE;
+            self.storage[offset..offset + data.len()].copy_from_slice(data);
+        };
+
+        return Ok(());
     }
 
     /// Write content to a exsisting file at a given offset.
@@ -238,9 +272,36 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         }
 
         let current_extent = self.entries[index].extent;
-        let current_capacity = current_extent.len_pages * PAGE_SIZE;
+        let current_capacity = current_extent.map_or(0, |ext| ext.len_pages) * PAGE_SIZE;
 
         let write_end = offset + data.len();
+
+        // If no extent is present, treat as first write.
+        if current_extent.is_none() {
+            // No hole check
+            if offset != 0 {
+                return Err(FsErr::InvalidOp);
+            }
+
+            // Treat as first write (without creating file)
+            let required_pages = write_end.div_ceil(PAGE_SIZE);
+            if let Some(extent) = self.find_free_pages(required_pages) {
+                self.mark_pages(extent.start_page, extent.len_pages, true);
+
+                self.entries[index].extent = Some(extent);
+                self.entries[index].size = data.len();
+
+                let offset = extent.start_page * PAGE_SIZE;
+                self.storage[offset..offset + data.len()].copy_from_slice(data);
+
+                return Ok(());
+            } else {
+                return Err(FsErr::NoSpace);
+            }
+        }
+
+        let current_extent = current_extent.expect("Extent should exsist.");
+
         // Try growing into neighbouring space.
         if write_end > current_capacity {
             let required_pages = write_end.div_ceil(PAGE_SIZE);
@@ -258,7 +319,10 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
                     true,
                 );
 
-                self.entries[index].extent.len_pages += neighbour_extent.len_pages;
+                self.entries[index]
+                    .extent
+                    .expect("Extent should exsist here.")
+                    .len_pages += neighbour_extent.len_pages;
             } else {
                 return Err(FsErr::WouldFragment);
             }
@@ -305,9 +369,26 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         }
 
         // Current allocation and required space.
-        let current_extent = self.entries[index].extent;
-        let current_capacity = current_extent.len_pages * PAGE_SIZE;
         let required_size = self.entries[index].size + data.len();
+        let current_extent = if let Some(extent) = self.entries[index].extent {
+            extent
+        } else {
+            // No extent present, we can allocate a new page.
+            let extent = self
+                .find_free_pages(required_size.div_ceil(PAGE_SIZE))
+                .ok_or(FsErr::NoSpace)?;
+
+            self.mark_pages(extent.start_page, extent.len_pages, true);
+
+            self.entries[index].extent = Some(extent);
+            self.entries[index].size = required_size;
+
+            let offset = extent.start_page * PAGE_SIZE;
+            self.storage[offset..offset + data.len()].copy_from_slice(data);
+
+            return Ok(());
+        };
+        let current_capacity = current_extent.len_pages * PAGE_SIZE;
 
         // Case 1: Fits current allocation.
         if required_size <= current_capacity {
@@ -327,10 +408,10 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         let next_page = current_extent.start_page + current_extent.len_pages;
         if let Some(neighbour) = self.check_neighbour_pages_free(next_page, extra_pages) {
             self.mark_pages(neighbour.start_page, neighbour.len_pages, true);
-            self.entries[index].extent = Extent {
+            self.entries[index].extent = Some(Extent {
                 start_page: current_extent.start_page,
                 len_pages: current_extent.len_pages + neighbour.len_pages,
-            };
+            });
 
             let offset = (current_extent.start_page * PAGE_SIZE) + self.entries[index].size;
             self.storage[offset..offset + data.len()].copy_from_slice(data);
@@ -359,7 +440,7 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
 
             self.mark_pages(current_extent.start_page, current_extent.len_pages, false);
 
-            self.entries[index].extent = new_extent;
+            self.entries[index].extent = Some(new_extent);
             self.entries[index].size = required_size;
             return Ok(());
         }
@@ -376,27 +457,39 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
             return Err(FsErr::ReadOnly);
         }
 
-        if new_size > entry.size || new_size == 0 {
+        // TODO: Handle growth here.
+        if new_size > entry.size {
             return Err(FsErr::InvalidOp);
         }
 
-        // Free unused pages
-        let current_pages = entry.extent.len_pages;
-        let required_pages = new_size.div_ceil(PAGE_SIZE);
-
-        if required_pages < current_pages {
-            let unused = Extent {
-                start_page: entry.extent.start_page + required_pages,
-                len_pages: entry.extent.len_pages - required_pages,
-            };
-            self.mark_pages(unused.start_page, unused.len_pages, false);
+        // Free all
+        if new_size == 0 {
+            if let Some(old_extent) = self.entries[index].extent.take() {
+                self.mark_pages(old_extent.start_page, old_extent.len_pages, false);
+            }
+            self.entries[index].size = 0;
+            return Ok(());
         }
 
-        self.entries[index].extent = Extent {
-            start_page: self.entries[index].extent.start_page,
-            len_pages: required_pages,
-        };
-        self.entries[index].size = new_size;
+        // Free unused pages
+        if let Some(current_extent) = entry.extent {
+            let current_pages = current_extent.len_pages;
+            let required_pages = new_size.div_ceil(PAGE_SIZE);
+
+            if required_pages < current_pages {
+                let unused = Extent {
+                    start_page: current_extent.start_page + required_pages,
+                    len_pages: current_extent.len_pages - required_pages,
+                };
+                self.mark_pages(unused.start_page, unused.len_pages, false);
+            }
+
+            self.entries[index].extent = Some(Extent {
+                start_page: current_extent.start_page,
+                len_pages: required_pages,
+            });
+            self.entries[index].size = new_size;
+        }
 
         Ok(())
     }
@@ -409,7 +502,9 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         let page_extent = self.entries[index].extent;
 
         self.entries.remove(index);
-        self.mark_pages(page_extent.start_page, page_extent.len_pages, false);
+        if let Some(page_extent) = page_extent {
+            self.mark_pages(page_extent.start_page, page_extent.len_pages, false);
+        }
 
         // No need to clear data from storage, can be overwritten.
         Ok(())
@@ -477,8 +572,8 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
 
                 write(&(file.size as u32).to_le_bytes());
                 write(&file.flags.bits().to_le_bytes());
-                write(&(file.extent.start_page as u32).to_le_bytes());
-                write(&(file.extent.len_pages as u32).to_le_bytes());
+                write(&(file.extent.map_or(0, |ext| ext.start_page) as u32).to_le_bytes());
+                write(&(file.extent.map_or(0, |ext| ext.len_pages) as u32).to_le_bytes());
             }
 
             // Data
@@ -576,7 +671,7 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
                 let file_extent_len = u32::from_le_bytes(file_extent_len) as usize;
 
                 // Sanity checks
-                if file_extent_len == 0 {
+                if (file_size == 0) != (file_extent_len == 0) {
                     return Err(FsErr::Corrupt);
                 }
                 let cap = file_extent_len
@@ -592,19 +687,24 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
                     return Err(FsErr::Corrupt);
                 }
 
+                let extent = if file_extent_len > 0 {
+                    self.mark_pages(file_extent_start, file_extent_len, true);
+                    Some(Extent {
+                        start_page: file_extent_start,
+                        len_pages: file_extent_len,
+                    })
+                } else {
+                    None
+                };
+
                 self.entries
                     .push(FileEntry {
                         name: heapless::String::from_str(name).map_err(|_| FsErr::Corrupt)?,
                         size: file_size as usize,
                         flags: FileFlags::from_bits_truncate(file_flags),
-                        extent: Extent {
-                            start_page: file_extent_start,
-                            len_pages: file_extent_len,
-                        },
+                        extent,
                     })
                     .map_err(|_| FsErr::Corrupt)?;
-
-                self.mark_pages(file_extent_start, file_extent_len, true);
             }
 
             // Storage data
@@ -739,12 +839,16 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
     pub fn list_files(&self) {
         println!("File entries:");
         for entry in &self.entries {
-            println!(
-                "\t{} ({} bytes @ {})",
-                entry.name,
-                entry.size,
-                entry.extent.start_page * PAGE_SIZE
-            );
+            if let Some(extent) = entry.extent {
+                println!(
+                    "\t{} ({} bytes @ {})",
+                    entry.name,
+                    entry.size,
+                    extent.start_page * PAGE_SIZE
+                );
+            } else {
+                println!("\t{} (NO DATA)", entry.name,);
+            }
         }
     }
 
