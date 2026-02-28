@@ -21,6 +21,7 @@ pub enum FsErr {
     NotFound,
     Duplicate,
     FileNameInvalid(&'static str),
+    FileNameSealed,
     TooManyFiles, // TODO: Depricate when possible. Too many files should not be a limiting factor (only OutOfSpace).
     InvalidOp,
     Corrupt,
@@ -171,6 +172,11 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
 
     pub fn rename(&mut self, name: &str, new_name: &str) -> Result<(), FsErr> {
         let index = self.find_file_index(name)?;
+
+        if self.entries[index].flags.contains(FileFlags::SEALED_NAMES) {
+            return Err(FsErr::FileNameSealed);
+        }
+
         let new_name = self.validate_file_name(
             String::from_str(new_name)
                 .map_err(|_| FsErr::FileNameInvalid("Error while processing file name"))?,
