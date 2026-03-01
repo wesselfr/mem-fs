@@ -619,6 +619,122 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Ok(())
     }
 
+    /// Ensure a file has at least `new_size` bytes of *capacity* allocated.
+    ///
+    /// This is a preallocation operation: it may allocate or grow the file's underlying extent,
+    /// but it does **not** change the file's logical `size` and does not write/zero any bytes.
+    ///
+    /// Growth is only allowed if it can be done contiguously:
+    /// - If the file has no extent yet (empty file), a new extent is allocated.
+    /// - If the file has an extent, it will only grow into neighbouring free pages.
+    /// - If neighbouring pages are not free, this function returns `WouldFragment`.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::NoSpace` if a new allocation is required but no contiguous run is available
+    /// - `FsErr::WouldFragment` if growth would require relocation
+    pub fn reserve(&mut self, name: &str, new_size: usize) -> Result<(), FsErr> {
+        self.reserve_impl(name, new_size, false)
+    }
+    /// Ensure a file has at least `new_size` bytes of *capacity* allocated, allowing relocation.
+    ///
+    /// This is identical to `reserve`, except that if the file cannot grow into neighbouring pages,
+    /// it may be relocated (repacked) to a new contiguous extent large enough to satisfy the request.
+    ///
+    /// This operation does **not** change the file's logical `size` and does not write/zero any bytes.
+    ///
+    /// # Errors
+    /// - `FsErr::NotFound` if the file does not exist
+    /// - `FsErr::ReadOnly` if the file has `IMMUTABLE`
+    /// - `FsErr::NoSpace` if no contiguous run of pages is available
+    /// - `FsErr::WouldFragment` if relocation is not possible (e.g. no large enough run)
+    pub fn reserve_or_repack(&mut self, name: &str, new_size: usize) -> Result<(), FsErr> {
+        self.reserve_impl(name, new_size, true)
+    }
+
+    fn reserve_impl(&mut self, name: &str, new_size: usize, repack: bool) -> Result<(), FsErr> {
+        let index = self.find_file_index(name)?;
+
+        if self.entries[index].flags.contains(FileFlags::IMMUTABLE) {
+            return Err(FsErr::ReadOnly);
+        }
+
+        let required_pages = new_size.div_ceil(PAGE_SIZE);
+        let current_pages = self.entries[index].extent.map_or(0, |ext| ext.len_pages);
+
+        // Already big enough
+        if required_pages <= current_pages {
+            return Ok(());
+        }
+
+        let current_extent = if let Some(extent) = self.entries[index].extent {
+            extent
+        } else {
+            // No extent present, we can allocate a new page.
+            let extent = self.find_free_pages(required_pages).ok_or(FsErr::NoSpace)?;
+            self.mark_pages(extent.start_page, extent.len_pages, true);
+            self.entries[index].extent = Some(extent);
+
+            return Ok(());
+        };
+
+        // Can we extent the page?
+        let next_page = current_extent.start_page + current_extent.len_pages;
+        if let Some(neighbour) =
+            self.check_neighbour_pages_free(next_page, required_pages - current_pages)
+        {
+            self.mark_pages(neighbour.start_page, neighbour.len_pages, true);
+            self.entries[index].extent = Some(Extent {
+                start_page: current_extent.start_page,
+                len_pages: current_extent.len_pages + neighbour.len_pages,
+            });
+            return Ok(());
+        };
+
+        // Relocate (repack) if allowed.
+        if repack && let Some(new_extent) = self.find_free_pages(required_pages) {
+            let old_start = current_extent.start_page * PAGE_SIZE;
+            let old_len = self.entries[index].size;
+            let old_range = old_start..old_start + old_len;
+
+            let new_start = new_extent.start_page * PAGE_SIZE;
+
+            self.mark_pages(new_extent.start_page, new_extent.len_pages, true);
+
+            // Move exsisting bytes
+            if old_len > 0 && old_start != new_start {
+                self.storage.copy_within(old_range, new_start);
+            }
+
+            self.mark_pages(current_extent.start_page, current_extent.len_pages, false);
+
+            self.entries[index].extent = Some(new_extent);
+            return Ok(());
+        }
+        // Can't extend and repack is not allowed.
+        Err(FsErr::WouldFragment)
+    }
+
+    /// Return the allocated capacity of a file in bytes.
+    ///
+    /// Capacity is `extent.len_pages * PAGE_SIZE`. Empty files (no extent) have capacity `0`.
+    ///
+    /// # Returns
+    /// - `Some(capacity_bytes)` if the file exists
+    /// - `None` if the file does not exist
+    pub fn capacity(&self, name: &str) -> Option<usize> {
+        if let Ok(index) = self.find_file_index(name) {
+            Some(
+                self.entries[index]
+                    .extent
+                    .map_or(0, |ext| ext.len_pages * PAGE_SIZE),
+            )
+        } else {
+            None
+        }
+    }
+
     /// Delete a file and free its allocated pages.
     ///
     /// Removing a file does not zero the underlying storage; freed pages may be reused and

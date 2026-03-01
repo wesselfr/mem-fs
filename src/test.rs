@@ -196,6 +196,84 @@ mod tests {
     }
 
     #[test]
+    fn reserve_empty_file_allocates_capacity_but_size_stays_zero() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"").unwrap();
+
+        assert_eq!(fs.read("foo").unwrap(), b"");
+        assert_eq!(fs.capacity("foo").unwrap(), 0);
+
+        fs.reserve("foo", 1).unwrap(); // should allocate 1 page
+        let cap = fs.capacity("foo").unwrap();
+        assert!(cap >= 1);
+        assert!(cap.is_multiple_of(mem_fs::DEFAULT_PAGE_SIZE)); // assumes default MemFs
+
+        // Still logically empty
+        assert_eq!(fs.read("foo").unwrap(), b"");
+    }
+
+    #[test]
+    fn reserve_does_not_change_file_size() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"hello").unwrap();
+
+        let before = fs.read("foo").unwrap().to_vec();
+        fs.reserve("foo", 200).unwrap(); // might grow capacity depending on layout
+
+        assert_eq!(fs.read("foo").unwrap(), before.as_slice());
+    }
+
+    #[test]
+    fn reserve_respects_immutable() {
+        let mut fs = MemFs::new();
+        fs.create_with_flags("foo", b"", FileFlags::IMMUTABLE)
+            .unwrap();
+
+        let err = fs.reserve("foo", 1).unwrap_err();
+        assert!(matches!(err, FsErr::ReadOnly));
+
+        let err = fs.reserve_or_repack("foo", 1).unwrap_err();
+        assert!(matches!(err, FsErr::ReadOnly));
+    }
+
+    #[test]
+    fn reserve_would_fragment_but_reserve_or_repack_succeeds() {
+        let mut fs = MemFs::new();
+
+        // Use small allocations that will likely end up adjacent with first-fit.
+        fs.create("a", &[0x11; 1]).unwrap(); // 1 page
+        fs.create("b", &[0x22; 1]).unwrap(); // 1 page, likely right after "a"
+
+        // Now try to reserve extra pages for "a" so it needs to grow.
+        // Neighbour page(s) should be occupied by "b", so strict reserve should fragment.
+        let grow_to = mem_fs::DEFAULT_PAGE_SIZE * 3; // request 3 pages capacity
+        let err = fs.reserve("a", grow_to).unwrap_err();
+        assert!(matches!(err, FsErr::WouldFragment));
+
+        // But repack is allowed; it can move "a" to a new contiguous run.
+        fs.reserve_or_repack("a", grow_to).unwrap();
+
+        // Contents must still be intact
+        assert_eq!(fs.read("a").unwrap(), &[0x11; 1]);
+    }
+
+    #[test]
+    fn reserve_fails_no_space_when_full() {
+        let mut fs = MemFs::new();
+
+        // Fill storage with one big file.
+        let big = [0xAAu8; mem_fs::DEFAULT_STORAGE_SIZE];
+        fs.create("big", &big).unwrap();
+
+        // Create an empty file entry.
+        fs.create("small", b"").unwrap();
+
+        // Any reserve that needs pages should fail.
+        let err = fs.reserve("small", 1).unwrap_err();
+        assert!(matches!(err, FsErr::NoSpace));
+    }
+
+    #[test]
     fn delete_file() {
         let mut fs = MemFs::new();
         fs.create("foo", b"test").unwrap();
