@@ -66,6 +66,114 @@ mod tests {
     }
 
     #[test]
+    fn read_at_basic_slice() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello World!").unwrap();
+
+        assert_eq!(fs.read_at("foo", 0, 5).unwrap(), b"Hello");
+        assert_eq!(fs.read_at("foo", 6, 5).unwrap(), b"World");
+        assert_eq!(fs.read_at("foo", 11, 1).unwrap(), b"!");
+    }
+
+    #[test]
+    fn read_at_len_clamped_to_eof() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello").unwrap();
+
+        // request beyond EOF should clamp
+        assert_eq!(fs.read_at("foo", 0, 999).unwrap(), b"Hello");
+        assert_eq!(fs.read_at("foo", 3, 999).unwrap(), b"lo");
+    }
+
+    #[test]
+    fn read_at_zero_len_is_empty() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello").unwrap();
+
+        assert_eq!(fs.read_at("foo", 0, 0).unwrap(), b"");
+        assert_eq!(fs.read_at("foo", 3, 0).unwrap(), b"");
+    }
+
+    #[test]
+    fn read_at_offset_at_eof_is_empty() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello").unwrap();
+
+        assert_eq!(fs.read_at("foo", 5, 1).unwrap(), b"");
+        assert_eq!(fs.read_at("foo", 5, 999).unwrap(), b"");
+        assert_eq!(fs.read_at("foo", 5, 0).unwrap(), b"");
+    }
+
+    #[test]
+    fn read_at_offset_past_eof_is_empty() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello").unwrap();
+
+        assert_eq!(fs.read_at("foo", 6, 1).unwrap(), b"");
+        assert_eq!(fs.read_at("foo", 999, 1).unwrap(), b"");
+    }
+
+    #[test]
+    fn read_at_empty_file_always_empty() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"").unwrap();
+
+        assert_eq!(fs.read_at("foo", 0, 0).unwrap(), b"");
+        assert_eq!(fs.read_at("foo", 0, 1).unwrap(), b"");
+        assert_eq!(fs.read_at("foo", 1, 1).unwrap(), b"");
+    }
+
+    #[test]
+    fn read_at_non_existing_file() {
+        let fs = MemFs::new();
+
+        // Adjust this if your API returns a different error (or if you decide to make it Ok(&[]) instead).
+        assert!(matches!(fs.read_at("foo", 0, 1), Err(FsErr::NotFound)));
+    }
+
+    #[test]
+    fn read_at_after_write_at_sees_updated_bytes() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello World!").unwrap();
+        fs.write_at("foo", 6, b"Rust").unwrap();
+
+        // "Hello Rustd!" (because "World" -> "Rust" keeps trailing "d")
+        assert_eq!(fs.read_at("foo", 0, 12).unwrap(), b"Hello Rustd!");
+        assert_eq!(fs.read_at("foo", 6, 4).unwrap(), b"Rust");
+    }
+
+    #[test]
+    fn read_at_after_truncate_clamps_to_new_size() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello World!").unwrap();
+        fs.truncate("foo", 5).unwrap();
+
+        assert_eq!(fs.read_at("foo", 0, 999).unwrap(), b"Hello");
+        assert_eq!(fs.read_at("foo", 4, 999).unwrap(), b"o");
+        assert_eq!(fs.read_at("foo", 5, 1).unwrap(), b"");
+    }
+
+    #[test]
+    fn read_at_respects_immutable_flag() {
+        let mut fs = MemFs::new();
+        fs.create_with_flags("foo", b"Hello World!", FileFlags::IMMUTABLE)
+            .unwrap();
+
+        // read_at should still work
+        assert_eq!(fs.read_at("foo", 0, 5).unwrap(), b"Hello");
+        assert_eq!(fs.read_at("foo", 6, 5).unwrap(), b"World");
+    }
+
+    #[test]
+    fn read_at_offset_plus_len_overflow_does_not_read_memory() {
+        let mut fs = MemFs::new();
+        fs.create("foo", b"Hello").unwrap();
+
+        assert_eq!(fs.read_at("foo", usize::MAX - 2, 10).unwrap(), b"");
+        assert_eq!(fs.read_at("foo", usize::MAX - 2, usize::MAX).unwrap(), b"");
+    }
+
+    #[test]
     fn empty_file_name() {
         let mut fs = MemFs::new();
         assert!(fs.create("", b"test").is_err());

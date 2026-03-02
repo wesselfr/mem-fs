@@ -201,6 +201,56 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
             }
         })
     }
+    /// Read a portion of a file starting at `offset`.
+    ///
+    /// Returns a slice into the internal storage backing the filesystem.
+    ///
+    /// If `offset` is at or past the end of the file, an empty slice (`&[]`)
+    /// is returned. The returned slice is clamped to the file's logical size.
+    ///
+    /// # Returns
+    /// - `Ok(&[u8])` containing up to `len` bytes if the file exists
+    /// - `Ok(&[])` if `offset` is at or past the end of the file
+    /// - `Err(FsErr::NotFound)` if the file does not exist
+    /// - `Err(FsErr::Corrupt)` if internal metadata is inconsistent
+    pub fn read_at(&self, name: &str, offset: usize, len: usize) -> Result<&[u8], FsErr> {
+        let index = self.find_file_index(name)?;
+        let entry = &self.entries[index];
+        if let Some(extent) = entry.extent {
+            // Offset outside of file
+            let extent_capacity = extent.len_pages * PAGE_SIZE;
+            if offset >= entry.size {
+                return Ok(&[]);
+            }
+            if offset > extent_capacity {
+                return Err(FsErr::Corrupt);
+            }
+
+            let readable_bytes = entry.size.checked_sub(offset).unwrap_or(0);
+            let len = len.min(readable_bytes);
+
+            // No bytes to read.
+            if len == 0 {
+                return Ok(&[]);
+            }
+            if offset.checked_add(len).ok_or(FsErr::Corrupt)? > extent_capacity {
+                return Err(FsErr::Corrupt);
+            }
+
+            // Read bytes with sanity checks.
+            if let Some(start) = (extent.start_page * PAGE_SIZE).checked_add(offset) {
+                if let Some(end) = start.checked_add(len) {
+                    if end > self.storage.len() {
+                        return Err(FsErr::Corrupt);
+                    }
+                    return Ok(&self.storage[start..end]);
+                }
+            }
+            Err(FsErr::Corrupt)
+        } else {
+            return Ok(&[]);
+        }
+    }
 
     /// Check whether a file exists.
     ///
