@@ -6,7 +6,7 @@ mod tests {
 
     #[test]
     fn create_read() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"test").expect("Failed to create file.");
 
         assert_eq!(fs.read("foo").unwrap(), b"test");
@@ -14,7 +14,7 @@ mod tests {
 
     #[test]
     fn create_empty_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"").expect("Failed to create file.");
 
         assert_eq!(fs.read("foo").unwrap(), b"");
@@ -22,7 +22,7 @@ mod tests {
 
     #[test]
     fn multiple_files() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"file_1").expect("Failed to create file.");
         fs.create("bar", b"file_2").expect("Failed to create file.");
 
@@ -32,7 +32,7 @@ mod tests {
 
     #[test]
     fn iter_files() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"file_1").unwrap();
         fs.create("bar", b"file_2").unwrap();
 
@@ -48,26 +48,26 @@ mod tests {
 
     #[test]
     fn file_exists() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"test").expect("Failed to create file.");
         assert_eq!(fs.exists("foo"), true);
     }
 
     #[test]
     fn file_not_existsing() {
-        let fs = MemFs::new();
+        let fs = mem_fs::memfs!();
         assert_eq!(fs.exists("foo"), false);
     }
 
     #[test]
     fn read_non_existing_file() {
-        let fs = MemFs::new();
+        let fs = mem_fs::memfs!();
         assert!(fs.read("foo").is_none());
     }
 
     #[test]
     fn read_at_basic_slice() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello World!").unwrap();
 
         assert_eq!(fs.read_at("foo", 0, 5).unwrap(), b"Hello");
@@ -77,7 +77,7 @@ mod tests {
 
     #[test]
     fn read_at_len_clamped_to_eof() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello").unwrap();
 
         // request beyond EOF should clamp
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn read_at_zero_len_is_empty() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello").unwrap();
 
         assert_eq!(fs.read_at("foo", 0, 0).unwrap(), b"");
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn read_at_offset_at_eof_is_empty() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello").unwrap();
 
         assert_eq!(fs.read_at("foo", 5, 1).unwrap(), b"");
@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn read_at_offset_past_eof_is_empty() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello").unwrap();
 
         assert_eq!(fs.read_at("foo", 6, 1).unwrap(), b"");
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn read_at_empty_file_always_empty() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"").unwrap();
 
         assert_eq!(fs.read_at("foo", 0, 0).unwrap(), b"");
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn read_at_non_existing_file() {
-        let fs = MemFs::new();
+        let fs = mem_fs::memfs!();
 
         // Adjust this if your API returns a different error (or if you decide to make it Ok(&[]) instead).
         assert!(matches!(fs.read_at("foo", 0, 1), Err(FsErr::NotFound)));
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn read_at_after_write_at_sees_updated_bytes() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello World!").unwrap();
         fs.write_at("foo", 6, b"Rust").unwrap();
 
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn read_at_after_truncate_clamps_to_new_size() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello World!").unwrap();
         fs.truncate("foo", 5).unwrap();
 
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn read_at_respects_immutable_flag() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create_with_flags("foo", b"Hello World!", FileFlags::IMMUTABLE)
             .unwrap();
 
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn read_at_offset_plus_len_overflow_does_not_read_memory() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello").unwrap();
 
         assert_eq!(fs.read_at("foo", usize::MAX - 2, 10).unwrap(), b"");
@@ -175,13 +175,13 @@ mod tests {
 
     #[test]
     fn empty_file_name() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         assert!(fs.create("", b"test").is_err());
     }
 
     #[test]
     fn create_duplicate_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
 
         fs.create("foo", b"test").unwrap();
         assert!(fs.create("foo", b"test").is_err());
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn rename_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"test").expect("Failed to create file");
         assert_eq!(fs.read("foo").unwrap(), b"test");
         fs.rename("foo", "bar").expect("Failed to rename file.");
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn rename_file_invalid() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"test").expect("Failed to create file");
 
         assert!(fs.rename("foo", "").is_err());
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn rename_file_duplicate() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("a", b"file_1").expect("Failed to create file.");
         fs.create("b", b"file_2").expect("Failed to create file.");
 
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn write_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello").unwrap();
         fs.write("foo", b"World!").unwrap();
 
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn write_at_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello World!").unwrap();
         fs.write_at("foo", 6, b"Rust!").unwrap();
 
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn write_respects_immutable_flag() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
 
         fs.create_with_flags("foo", &[1u8; 10], FileFlags::IMMUTABLE)
             .unwrap();
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn write_empty_frees_space_and_reads_empty() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
 
         let big = [0xAAu8; mem_fs::DEFAULT_STORAGE_SIZE];
         fs.create("big", &big).unwrap();
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn write_at_empty_is_noop() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", &[1u8; 10]).unwrap();
 
         fs.write_at("foo", 0, &[]).unwrap();
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn write_create_if_missing() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.write("foo", &[4u8; 12]).unwrap();
 
         assert_eq!(fs.read("foo").unwrap(), &[4u8; 12]);
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn truncate_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"Hello World!").unwrap();
         fs.truncate("foo", 5).unwrap();
 
@@ -292,20 +292,20 @@ mod tests {
 
     #[test]
     fn append_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"").unwrap();
         fs.append("foo", b"test").unwrap();
     }
 
     #[test]
     fn append_non_exsisting_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         assert!(matches!(fs.append("foo", b"test"), Err(FsErr::NotFound)));
     }
 
     #[test]
     fn reserve_empty_file_allocates_capacity_but_size_stays_zero() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"").unwrap();
 
         assert_eq!(fs.read("foo").unwrap(), b"");
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn reserve_does_not_change_file_size() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"hello").unwrap();
 
         let before = fs.read("foo").unwrap().to_vec();
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn reserve_respects_immutable() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create_with_flags("foo", b"", FileFlags::IMMUTABLE)
             .unwrap();
 
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn reserve_would_fragment_but_reserve_or_repack_succeeds() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
 
         // Use small allocations that will likely end up adjacent with first-fit.
         fs.create("a", &[0x11; 1]).unwrap(); // 1 page
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn reserve_fails_no_space_when_full() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
 
         // Fill storage with one big file.
         let big = [0xAAu8; mem_fs::DEFAULT_STORAGE_SIZE];
@@ -383,7 +383,7 @@ mod tests {
 
     #[test]
     fn delete_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"test").unwrap();
         fs.delete("foo").expect("Failed to delete file");
         assert!(fs.read("foo").is_none());
@@ -391,20 +391,20 @@ mod tests {
 
     #[test]
     fn delete_non_existing_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         assert!(fs.delete("foo").is_err());
     }
 
     #[test]
     fn delete_empty_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"").unwrap();
         fs.delete("foo").unwrap();
     }
 
     #[test]
     fn delete_file_twice() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         fs.create("foo", b"test").unwrap();
 
         assert!(fs.delete("foo").is_ok());
@@ -413,14 +413,14 @@ mod tests {
 
     #[test]
     fn large_file() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         let data = [255; mem_fs::DEFAULT_STORAGE_SIZE];
         fs.create("foo", &data).unwrap();
     }
 
     #[test]
     fn file_too_big() {
-        let mut fs = MemFs::new();
+        let mut fs = mem_fs::memfs!();
         let data = [255; mem_fs::DEFAULT_STORAGE_SIZE + 1];
         assert!(fs.create("foo", &data).is_err());
     }
@@ -451,13 +451,13 @@ mod tests {
 
         #[test]
         fn dump_restore_roundtrip_basic() {
-            let mut fs = MemFs::new();
+            let mut fs = mem_fs::memfs!();
             fs.create("foo", b"hello").unwrap();
             fs.create("bar", b"world!!").unwrap();
 
             let data = dump_to_vec(&fs);
 
-            let mut fs2 = MemFs::new();
+            let mut fs2 = mem_fs::memfs!();
             restore_from_slice(&mut fs2, &data).unwrap();
 
             assert_eq!(fs2.read("foo").unwrap(), b"hello");
@@ -466,10 +466,10 @@ mod tests {
 
         #[test]
         fn dump_restore_empty_fs() {
-            let fs = MemFs::new();
+            let fs = mem_fs::memfs!();
             let data = dump_to_vec(&fs);
 
-            let mut fs2 = MemFs::new();
+            let mut fs2 = mem_fs::memfs!();
             restore_from_slice(&mut fs2, &data).unwrap();
 
             assert_eq!(fs2.entries().count(), 0);
@@ -477,12 +477,12 @@ mod tests {
 
         #[test]
         fn restore_rejects_bad_magic() {
-            let fs = MemFs::new();
+            let fs = mem_fs::memfs!();
             let mut data = dump_to_vec(&fs);
 
             data[0] ^= 0xFF; // corrupt first magic byte
 
-            let mut fs2 = MemFs::new();
+            let mut fs2 = mem_fs::memfs!();
             assert!(matches!(
                 restore_from_slice(&mut fs2, &data),
                 Err(FsErr::Corrupt)
@@ -491,19 +491,19 @@ mod tests {
 
         #[test]
         fn restore_rejects_truncated_dump() {
-            let mut fs = MemFs::new();
+            let mut fs = mem_fs::memfs!();
             fs.create("foo", b"hello").unwrap();
 
             let data = dump_to_vec(&fs);
             let truncated = &data[..data.len() - 1];
 
-            let mut fs2 = MemFs::new();
+            let mut fs2 = mem_fs::memfs!();
             assert!(restore_from_slice(&mut fs2, truncated).is_err());
         }
 
         #[test]
         fn restore_rejects_storage_len_mismatch() {
-            let fs = MemFs::new();
+            let fs = mem_fs::memfs!();
             let mut data = dump_to_vec(&fs);
 
             // Patch storage_len (last 4 bytes before storage).
@@ -512,7 +512,7 @@ mod tests {
             let bad = (DEFAULT_STORAGE_SIZE as u32 - 1).to_le_bytes();
             data[off..off + 4].copy_from_slice(&bad);
 
-            let mut fs2 = MemFs::new();
+            let mut fs2 = mem_fs::memfs!();
             assert!(matches!(
                 restore_from_slice(&mut fs2, &data),
                 Err(FsErr::Corrupt)
@@ -522,6 +522,6 @@ mod tests {
     #[cfg(not(feature = "std"))]
     #[test]
     fn no_std_builds() {
-        let _ = mem_fs::MemFs::new();
+        let _ = mem_fs::mem_fs::memfs!();
     }
 }

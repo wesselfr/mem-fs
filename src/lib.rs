@@ -58,22 +58,22 @@ impl FileEntry {
     }
 }
 
-pub type MemFs = MemoryFs<DEFAULT_STORAGE_SIZE, DEFAULT_PAGE_SIZE>;
-pub struct MemoryFs<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> {
+#[macro_export]
+macro_rules! memfs {
+    () => {{
+        static mut STORAGE: [u8; $crate::DEFAULT_STORAGE_SIZE] = [0; $crate::DEFAULT_STORAGE_SIZE];
+        unsafe { $crate::MemFs::from_backed(&mut *core::ptr::addr_of_mut!(STORAGE)) }
+    }};
+}
+
+pub type MemFs = MemoryFs<'static, DEFAULT_STORAGE_SIZE, DEFAULT_PAGE_SIZE>;
+pub struct MemoryFs<'a, const STORAGE_SIZE: usize, const PAGE_SIZE: usize> {
     entries: Vec<FileEntry, MAX_NUM_FILES>,
-    storage: [u8; STORAGE_SIZE],
+    storage: &'a mut [u8; STORAGE_SIZE],
     page_bitmap: heapless::Vec<u32, MAX_PAGE_BITMAP_WORDS>,
 }
 
-impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> Default
-    for MemoryFs<STORAGE_SIZE, PAGE_SIZE>
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, PAGE_SIZE> {
+impl<'a, const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<'a, STORAGE_SIZE, PAGE_SIZE> {
     const fn num_pages() -> usize {
         STORAGE_SIZE / PAGE_SIZE
     }
@@ -82,12 +82,13 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
         Self::num_pages().div_ceil(32)
     }
 
-    pub fn new() -> Self {
+    pub fn from_backed(storage: &'a mut [u8; STORAGE_SIZE]) -> Self {
         assert!(PAGE_SIZE > 0);
         assert!(STORAGE_SIZE.is_multiple_of(PAGE_SIZE));
 
         let mut page_bitmap: heapless::Vec<u32, MAX_PAGE_BITMAP_WORDS> = heapless::Vec::new();
         let words = Self::bitmap_words();
+
         assert!(words <= MAX_PAGE_BITMAP_WORDS);
 
         for _ in 0..words {
@@ -96,7 +97,7 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
 
         Self {
             entries: Vec::new(),
-            storage: [0; STORAGE_SIZE],
+            storage,
             page_bitmap,
         }
     }
@@ -895,7 +896,7 @@ impl<const STORAGE_SIZE: usize, const PAGE_SIZE: usize> MemoryFs<STORAGE_SIZE, P
             // Data
             let storage_len: u32 = self.storage.len() as u32;
             write(&storage_len.to_le_bytes());
-            write(&self.storage);
+            write(self.storage);
         }
 
         // Footer
